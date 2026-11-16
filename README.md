@@ -12,7 +12,7 @@ A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** 
 
 ---
 
-## Requirements
+## Requirements & Installation
 
 - **Python 3** (`>= 3.10`)
 - **QGIS & PyQGIS** (`qgis.core`)
@@ -20,7 +20,19 @@ A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** 
 - **NumPy** (`numpy`)
 - **Pillow** (`PIL`)
 
-Install system dependencies on Linux:
+### Option 1: Cross-Platform via Conda / Mamba (macOS, Windows, Linux)
+
+The easiest way to install `qgis` and `PyQGIS` across **macOS (Apple Silicon & Intel)**, **Windows**, and **Linux** is via [`conda-forge`](https://conda-forge.org/) (using [Miniforge](https://github.com/conda-forge/miniforge) or [Miniconda](https://docs.anaconda.com/miniconda/)):
+
+```bash
+conda create -n lora-gis -c conda-forge python=3.11 qgis numpy pillow
+conda activate lora-gis
+pip install --no-build-isolation -e .
+```
+
+### Option 2: Native OS Packages
+
+#### Linux
 
 ```bash
 # Debian / Ubuntu
@@ -31,12 +43,29 @@ sudo dnf install qgis python3-qgis python3-qt5 python3-numpy python3-pillow
 
 # Arch Linux
 sudo pacman -S qgis python-pyqt5 python-numpy python-pillow
+
+# Install lora-gis
+pip install --no-build-isolation --user -e .
 ```
 
-Install `lora-gis` in editable or user mode:
+#### macOS (Official `QGIS.app` or Homebrew)
+
+1. Install QGIS via Homebrew (`brew install --cask qgis`) or download the official macOS disk image from [qgis.org](https://qgis.org/download/).
+2. Install and run `lora-gis` using the Python environment bundled inside `QGIS.app`:
 
 ```bash
-pip install --no-build-isolation --user -e .
+/Applications/QGIS.app/Contents/MacOS/bin/python3 -m pip install --no-build-isolation -e .
+/Applications/QGIS.app/Contents/MacOS/bin/python3 -m lora_gis --route "Boulder, CO" "Nederland, CO"
+```
+
+#### Windows (OSGeo4W / Standalone QGIS Installer)
+
+1. Install QGIS from [qgis.org](https://qgis.org/download/).
+2. Open the **OSGeo4W Shell** from the Start Menu (which pre-configures `python` and `QGIS_PREFIX_PATH` for PyQGIS) and run:
+
+```bat
+python -m pip install --no-build-isolation -e .
+python -m lora_gis --route "Boulder, CO" "Nederland, CO"
 ```
 
 ---
