@@ -2,11 +2,28 @@
 
 A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** and automated topographic map renderer. Designed to route off-grid radio links across mountainous terrain using high-resolution Digital Elevation Models (DEMs).
 
+![Sample Output: Livingston Manor ↔ Liberty ↔ Monticello](examples/livingston-manor-liberty-monticello/map.png)
+
 - **1-Hop & 2-Hop Repeater Discovery**: Scans candidate grids from coarse (`500 m`) down to fine (`150 m`) resolution to discover both **single-repeater (`1-hop`)** and **two-repeater (`2-hop`)** sightline paths when direct line-of-sight is blocked by terrain.
 - **Topology-Based Multi-Leg & Mesh Routing**: Define sequential routes (`--route`), explicit point-to-point mesh links (`--links`), or JSON topology configs (`--config`), with automatic repeater mount-height sensitivity tables (`30 ft` to `90 ft`) for intermediate hub nodes.
 - **LoRa RF Propagation Modeling**: Evaluates **1st Fresnel Zone ($F_1$) clearance** at `915 MHz` (US915), `868 MHz` (EU868), or `433 MHz`, **4/3 effective Earth curvature + atmospheric refraction**, minimum terrain clearance, and **Free-Space Path Loss (FSPL in dB)** along every hop.
 - **Multi-Source DEM & Automatic UTM Projection**: Automatically detects the local metric UTM zone (`EPSG:269xx` / `326xx` / `327xx`) and streams 32-bit float elevation grids from **USGS 3DEP** (nationwide US), state GIS servers (`ny-gis`), custom ArcGIS ImageServers, or local GeoTIFF DEM files.
 - **Automated Topographic Cartography & Markdown Reports**: Exports both a high-resolution (`1920×1080`) PNG topographic map and a detailed Markdown RF report (`results/YYYY-MM-DD_HH-MM-SS/`) containing link metrics, node elevations, hop-by-hop Fresnel clearances, FSPL, top candidate relay sites, and surrounding USGS GeoNames mountain summits and towns.
+
+---
+
+## Sample Output (`Livingston Manor ↔ Liberty ↔ Monticello`)
+
+Generated with:
+
+```bash
+python3 -m lora_gis --state NY --dem ny-gis --route "Livingston Manor" "Liberty" "Monticello" --hops 2
+```
+
+- **Topographic Relay Map**: [`examples/livingston-manor-liberty-monticello/map.png`](examples/livingston-manor-liberty-monticello/map.png)
+- **Full RF Analysis Report**: [`examples/livingston-manor-liberty-monticello/report.md`](examples/livingston-manor-liberty-monticello/report.md)
+  - **Leg 1 (`Livingston Manor ↔ Liberty`, `12.93 km`)**: Direct sightline blocked by Revonah Hill & Grants Hill (`-188.7 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `69%` worst-case $F_1$ clearance).
+  - **Leg 2 (`Liberty ↔ Monticello`, `16.85 km`)**: Direct sightline blocked (`-32.7 m` deficit); solved by a **1-Hop Single Repeater** on Walnut Mountain (`652 m / 2,140 ft`, `43%` $F_1$) or a **2-Hop Repeater Pair** (`16.85 km` total path, `67%` $F_1$).
 
 ---
 
