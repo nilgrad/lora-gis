@@ -3,6 +3,8 @@
 import argparse
 from datetime import datetime
 import os
+import sys
+import tempfile
 from typing import Dict, List, Optional
 import numpy as np
 
@@ -238,8 +240,8 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 if k not in config.custom_height_keys:
                     config.locations[k]["height_m"] = config.default_repeater_height_m
 
-    os.environ.setdefault("QGIS_CUSTOM_CONFIG_PATH", "/tmp/qgis_los_config")
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+    os.environ.setdefault("QGIS_CUSTOM_CONFIG_PATH", os.path.join(tempfile.gettempdir(), "qgis_los_config"))
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     from qgis.core import (
@@ -255,7 +257,23 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
     headless_cli = False
     if QgsApplication.instance() is None:
         headless_cli = True
-        QgsApplication.setPrefixPath("/usr", True)
+        qgis_prefix = os.environ.get("QGIS_PREFIX_PATH")
+        if not qgis_prefix:
+            if os.environ.get("CONDA_PREFIX"):
+                conda_p = os.environ["CONDA_PREFIX"]
+                qgis_prefix = os.path.join(conda_p, "Library") if sys.platform == "win32" else conda_p
+            elif sys.platform == "darwin":
+                for app_cand in (
+                    "/Applications/QGIS.app/Contents/MacOS",
+                    "/Applications/QGIS-LTR.app/Contents/MacOS",
+                ):
+                    if os.path.isdir(app_cand):
+                        qgis_prefix = app_cand
+                        break
+            elif os.path.isdir("/usr"):
+                qgis_prefix = "/usr"
+        if qgis_prefix:
+            QgsApplication.setPrefixPath(qgis_prefix, True)
         qgs_app = QgsApplication([], False)
         qgs_app.initQgis()
 
