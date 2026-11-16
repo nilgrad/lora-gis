@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lora-gis"
+version = "0.1.0"
+description = "PyQGIS Line-of-Sight (LOS) and LoRa / MeshCore RF repeater pathfinder & topographic map renderer"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Nil Gradisnik", email = "nil.gradisnik@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "Pillow",
+]
+keywords = ["lora", "meshcore", "meshtastic", "qgis", "pyqgis", "rf", "line-of-sight", "fresnel", "dem", "gis"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Telecommunications Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Ham Radio",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+[project.scripts]
+lora-gis = "lora_gis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lora_gis*"]
