@@ -12,23 +12,6 @@ A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** 
 
 ---
 
-## Sample Output (`Livingston Manor ↔ Liberty ↔ Monticello`)
-
-![Sample Output: Livingston Manor ↔ Liberty ↔ Monticello](examples/livingston-manor-liberty-monticello/map.png)
-
-Generated with:
-
-```bash
-python3 -m lora_gis --state NY --dem ny-gis --route "Livingston Manor" "Liberty" "Monticello" --hops 2
-```
-
-- **Topographic Relay Map**: [`examples/livingston-manor-liberty-monticello/map.png`](examples/livingston-manor-liberty-monticello/map.png)
-- **Full RF Analysis Report**: [`examples/livingston-manor-liberty-monticello/report.md`](examples/livingston-manor-liberty-monticello/report.md)
-  - **Leg 1 (`Livingston Manor ↔ Liberty`, `12.93 km`)**: Direct sightline blocked by Revonah Hill & Grants Hill (`-188.7 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `69%` worst-case $F_1$ clearance).
-  - **Leg 2 (`Liberty ↔ Monticello`, `16.85 km`)**: Direct sightline blocked (`-32.7 m` deficit); solved by a **1-Hop Single Repeater** on Walnut Mountain (`652 m / 2,140 ft`, `43%` $F_1$) or a **2-Hop Repeater Pair** (`16.85 km` total path, `67%` $F_1$).
-
----
-
 ## Requirements
 
 - **Python 3** (`>= 3.10`)
@@ -155,6 +138,20 @@ config = LoRaGISConfig(
 if __name__ == "__main__":
     main(config)
 ```
+
+---
+
+## Sample Output (`Livingston Manor ↔ Liberty ↔ Monticello`)
+
+Generated with:
+
+```bash
+python3 -m lora_gis --state NY --dem ny-gis --route "Livingston Manor" "Liberty" "Monticello" --hops 2
+```
+
+- **Full RF Analysis Report & Topographic Map**: [`examples/livingston-manor-liberty-monticello/report.md`](examples/livingston-manor-liberty-monticello/report.md)
+  - **Leg 1 (`Livingston Manor ↔ Liberty`, `12.93 km`)**: Direct sightline blocked by Revonah Hill & Grants Hill (`-188.7 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `69%` worst-case $F_1$ clearance).
+  - **Leg 2 (`Liberty ↔ Monticello`, `16.85 km`)**: Direct sightline blocked (`-32.7 m` deficit); solved by a **1-Hop Single Repeater** on Walnut Mountain (`652 m / 2,140 ft`, `43%` $F_1$) or a **2-Hop Repeater Pair** (`16.85 km` total path, `67%` $F_1$).
 
 ---
 
