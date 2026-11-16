@@ -184,6 +184,12 @@ python3 -m lora_gis --state NY --dem ny-gis --route "Livingston Manor" "Liberty"
 
 ---
 
+## Acknowledgments
+
+Special thanks to [@tectosage](https://github.com/tectosage) for contributions to the original implementation and code review.
+
+---
+
 ## License
 
 Released under the [MIT License](LICENSE).
