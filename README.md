@@ -1,8 +1,8 @@
 # lora-gis
 
-A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** and automated topographic map renderer. Designed to route off-grid radio links across mountainous terrain using high-resolution Digital Elevation Models (DEMs).
+![LoRa-GIS](assets/title.svg)
 
-![Sample Output: Livingston Manor ↔ Liberty ↔ Monticello](examples/livingston-manor-liberty-monticello/map.png)
+A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** and automated topographic map renderer. Designed to route off-grid radio links across mountainous terrain using high-resolution Digital Elevation Models (DEMs).
 
 - **1-Hop & 2-Hop Repeater Discovery**: Scans candidate grids from coarse (`500 m`) down to fine (`150 m`) resolution to discover both **single-repeater (`1-hop`)** and **two-repeater (`2-hop`)** sightline paths when direct line-of-sight is blocked by terrain.
 - **Topology-Based Multi-Leg & Mesh Routing**: Define sequential routes (`--route`), explicit point-to-point mesh links (`--links`), or JSON topology configs (`--config`), with automatic repeater mount-height sensitivity tables (`30 ft` to `90 ft`) for intermediate hub nodes.
@@ -13,6 +13,8 @@ A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** 
 ---
 
 ## Sample Output (`Livingston Manor ↔ Liberty ↔ Monticello`)
+
+![Sample Output: Livingston Manor ↔ Liberty ↔ Monticello](examples/livingston-manor-liberty-monticello/map.png)
 
 Generated with:
 
