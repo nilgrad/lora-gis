@@ -2,7 +2,7 @@
 
 All notable changes to `lora-gis` are documented in this file.
 
-## [1.2.0] - 2026-11-19
+## [1.1.0] - 2026-11-19
 
 ### Added
 - **Explicit Candidate Relay Evaluation (`--candidates` / `--candidate-relays`, `--candidate-height`)**:
