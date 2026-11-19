@@ -1,6 +1,6 @@
 """PyQGIS topographic map rendering and vector layer symbology."""
 
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .config import LoRaGISConfig
 from .dem import DEMProvider
@@ -20,6 +20,7 @@ def render_topographic_map(
     inv_transform,
     timestamp_str: str,
     png_output_path: str,
+    candidate_keys: Optional[List[str]] = None,
 ) -> Tuple[List, List, List[float]]:
     """
     Renders the topographic map backdrop, candidate relays, 1-hop/2-hop sightlines,
@@ -99,8 +100,14 @@ def render_topographic_map(
             r1_pt, r2_pt = res["best_2hop"]["r1"], res["best_2hop"]["r2"]
             r1_ll = inv_transform.transform(QgsPointXY(*r1_pt))
             r2_ll = inv_transform.transform(QgsPointXY(*r2_pt))
-            raw_nodes.append(("2-Hop Relay 1", r1_pt, r1_ll.y(), r1_ll.x()))
-            raw_nodes.append(("2-Hop Relay 2", r2_pt, r2_ll.y(), r2_ll.x()))
+            r1_lbl = res["best_2hop"].get("r1_name") or "2-Hop Relay 1"
+            r2_lbl = res["best_2hop"].get("r2_name") or "2-Hop Relay 2"
+            if r1_lbl == "Grid Relay":
+                r1_lbl = "2-Hop Relay 1"
+            if r2_lbl == "Grid Relay":
+                r2_lbl = "2-Hop Relay 2"
+            raw_nodes.append((r1_lbl, r1_pt, r1_ll.y(), r1_ll.x()))
+            raw_nodes.append((r2_lbl, r2_pt, r2_ll.y(), r2_ll.x()))
             path_2h = [u_loc["xy"], r1_pt, r2_pt, v_loc["xy"]]
             for i in range(len(path_2h) - 1):
                 f_line = QgsFeature()
@@ -122,10 +129,15 @@ def render_topographic_map(
         if map_1h is not None:
             oh_pt = map_1h["relay"]
             oh_ll = inv_transform.transform(QgsPointXY(*oh_pt))
+            cand_nm = map_1h.get("candidate_name")
             oh_label = (
-                f"1-Hop Relay ({u_loc['name']}–{v_loc['name']})"
-                if len(link_results) > 1
-                else "1-Hop Single Relay"
+                f"1-Hop Relay ({cand_nm})"
+                if cand_nm
+                else (
+                    f"1-Hop Relay ({u_loc['name']}–{v_loc['name']})"
+                    if len(link_results) > 1
+                    else "1-Hop Single Relay"
+                )
             )
             raw_nodes.append((oh_label, oh_pt, oh_ll.y(), oh_ll.x()))
             path_1h = [u_loc["xy"], oh_pt, v_loc["xy"]]
@@ -173,9 +185,68 @@ def render_topographic_map(
     onehop_layer.updateExtents()
     blocked_layer.updateExtents()
 
+    explicit_viable_layer = None
+    explicit_blocked_layer = None
+    if candidate_keys:
+        explicit_viable_layer = QgsVectorLayer(
+            f"Point?crs={epsg_str}&field=LabelText:string",
+            f"Viable Candidate Relays ({timestamp_str})",
+            "memory",
+        )
+        explicit_blocked_layer = QgsVectorLayer(
+            f"Point?crs={epsg_str}&field=LabelText:string",
+            f"Blocked Candidate Relays ({timestamp_str})",
+            "memory",
+        )
+        ev_prov = explicit_viable_layer.dataProvider()
+        eb_prov = explicit_blocked_layer.dataProvider()
+
+        cand_eval_by_key: Dict[str, List[Dict]] = {k: [] for k in candidate_keys}
+        for res in link_results:
+            for ec in res.get("explicit_candidates", []):
+                if ec["key"] in cand_eval_by_key:
+                    cand_eval_by_key[ec["key"]].append(ec)
+
+        for c_key in candidate_keys:
+            c_loc = config.locations[c_key]
+            evals = cand_eval_by_key.get(c_key, [])
+            is_viable = any(e["viable"] for e in evals)
+            elev_m = evals[0]["elev_m"] if evals else dem.fetch_elevations([c_loc["xy"]])[0]
+            elev_ft = elev_m * 3.28084
+            if is_viable:
+                best_f1 = max(e["min_fresnel"] for e in evals if e["viable"])
+                status_txt = f"1-Hop: {best_f1*100:.0f}% F1"
+            elif evals:
+                e0 = evals[0]
+                l1_s = "OK" if e0["leg1"]["clear"] else f"{e0['leg1']['min_clearance_m']:.0f}m"
+                l2_s = "OK" if e0["leg2"]["clear"] else f"{e0['leg2']['min_clearance_m']:.0f}m"
+                status_txt = f"Blocked ({l1_s} / {l2_s})"
+            else:
+                status_txt = "Candidate"
+
+            feat = QgsFeature()
+            feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*c_loc["xy"])))
+            lbl = (
+                f"{c_loc['name']}\n"
+                f"({c_loc['lat']:.5f}, {c_loc['lon']:.5f})\n"
+                f"Elev: {elev_m:.0f} m ({elev_ft:,.0f} ft) | {status_txt}"
+            )
+            feat.setAttributes([lbl])
+            if is_viable:
+                ev_prov.addFeature(feat)
+            else:
+                eb_prov.addFeature(feat)
+
+        explicit_viable_layer.updateExtents()
+        explicit_blocked_layer.updateExtents()
+
     full_extent = node_layer.extent()
     if cand_layer.featureCount() > 0:
         full_extent.combineExtentWith(cand_layer.extent())
+    if explicit_viable_layer is not None and explicit_viable_layer.featureCount() > 0:
+        full_extent.combineExtentWith(explicit_viable_layer.extent())
+    if explicit_blocked_layer is not None and explicit_blocked_layer.featureCount() > 0:
+        full_extent.combineExtentWith(explicit_blocked_layer.extent())
     full_extent.scale(config.map_extent_scale)
 
     peaks_list, towns_list = fetch_geonames_features(full_extent, wkid, config.geonames_url)
@@ -299,14 +370,55 @@ def render_topographic_map(
     town_layer.setLabeling(QgsVectorLayerSimpleLabeling(town_lbl))
     town_layer.setLabelsEnabled(True)
 
-    for lyr in [cand_layer, blocked_layer, onehop_layer, line_layer, peak_layer, town_layer, node_layer]:
+    extra_cand_layers = []
+    if explicit_viable_layer is not None and explicit_blocked_layer is not None:
+        ev_symbol = QgsMarkerSymbol.createSimple({
+            "name": "diamond",
+            "color": "20,165,65,255",
+            "outline_color": "255,255,255,255",
+            "outline_width": "0.8",
+            "size": "4.8",
+        })
+        explicit_viable_layer.setRenderer(QgsSingleSymbolRenderer(ev_symbol))
+
+        eb_symbol = QgsMarkerSymbol.createSimple({
+            "name": "diamond",
+            "color": "145,55,180,235",
+            "outline_color": "255,255,255,255",
+            "outline_width": "0.75",
+            "size": "4.2",
+        })
+        explicit_blocked_layer.setRenderer(QgsSingleSymbolRenderer(eb_symbol))
+
+        for lyr, color_rgb in [
+            (explicit_viable_layer, (10, 95, 35)),
+            (explicit_blocked_layer, (95, 25, 125)),
+        ]:
+            c_tf = QgsTextFormat()
+            c_tf.setFont(QFont("DejaVu Sans", 8, _bold_weight))
+            c_tf.setColor(QColor(*color_rgb))
+            c_buf = QgsTextBufferSettings()
+            c_buf.setEnabled(True)
+            c_buf.setSize(1.4)
+            c_buf.setColor(QColor(255, 255, 255))
+            c_tf.setBuffer(c_buf)
+            c_lbl = QgsPalLayerSettings()
+            c_lbl.fieldName = "LabelText"
+            c_lbl.isExpression = False
+            c_lbl.dist = 2.0
+            c_lbl.setFormat(c_tf)
+            lyr.setLabeling(QgsVectorLayerSimpleLabeling(c_lbl))
+            lyr.setLabelsEnabled(True)
+            extra_cand_layers.append(lyr)
+
+    for lyr in [cand_layer, blocked_layer, onehop_layer, line_layer, peak_layer, town_layer, *extra_cand_layers, node_layer]:
         QgsProject.instance().addMapLayer(lyr)
 
     map_settings = QgsMapSettings()
     map_settings.setDestinationCrs(crs_utm)
     map_settings.setTransformContext(QgsProject.instance().transformContext())
 
-    render_layers = [node_layer, peak_layer, town_layer, line_layer, onehop_layer, blocked_layer, cand_layer]
+    render_layers = [node_layer, *extra_cand_layers, peak_layer, town_layer, line_layer, onehop_layer, blocked_layer, cand_layer]
     if topo_layer.isValid():
         render_layers.append(topo_layer)
 
