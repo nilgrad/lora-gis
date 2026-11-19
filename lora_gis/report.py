@@ -1,6 +1,6 @@
 """Markdown RF propagation and repeater analysis report generator."""
 
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from .config import LoRaGISConfig
 from .dem import DEMProvider
@@ -23,6 +23,8 @@ def export_markdown_report(
     timestamp_str: str,
     png_filename: str,
     md_output_path: str,
+    candidate_keys: Optional[List[str]] = None,
+    profiles_filename: Optional[str] = None,
 ) -> None:
     """Exports the complete Markdown RF link & repeater report to `md_output_path`."""
     from qgis.core import QgsPointXY
@@ -57,6 +59,17 @@ def export_markdown_report(
             f"Ground Elev `{loc['elev_m']:.1f} m` (`{loc['elev_m']*3.28084:,.0f} ft`), "
             f"Mount `{loc['height_m']:.2f} m` (`{loc['height_m']*3.28084:.1f} ft`) AGL |"
         )
+
+    if candidate_keys:
+        cand_elev_list = dem.fetch_elevations([config.locations[k]["xy"] for k in candidate_keys])
+        for k, c_elev_m in zip(candidate_keys, cand_elev_list):
+            loc = config.locations[k]
+            loc["elev_m"] = c_elev_m
+            md_lines.append(
+                f"| **{loc['name']} (Candidate Relay)** | `{loc['lat']:.6f}, {loc['lon']:.6f}`, "
+                f"Ground Elev `{c_elev_m:.1f} m` (`{c_elev_m*3.28084:,.0f} ft`), "
+                f"Mount `{loc['height_m']:.2f} m` (`{loc['height_m']*3.28084:.1f} ft`) AGL |"
+            )
 
     for res in link_results:
         u_loc, v_loc = res["u_loc"], res["v_loc"]
@@ -97,11 +110,19 @@ def export_markdown_report(
 
         if res["best_2hop"] is not None:
             r1_pt, r2_pt = res["best_2hop"]["r1"], res["best_2hop"]["r2"]
+            r1_h = res["best_2hop"].get("r1_height_m", config.relay_height_m)
+            r2_h = res["best_2hop"].get("r2_height_m", config.relay_height_m)
+            r1_name = res["best_2hop"].get("r1_name") or "2-Hop Relay 1"
+            r2_name = res["best_2hop"].get("r2_name") or "2-Hop Relay 2"
+            if r1_name == "Grid Relay":
+                r1_name = "2-Hop Relay 1 (Grid)"
+            if r2_name == "Grid Relay":
+                r2_name = "2-Hop Relay 2 (Grid)"
             r1_ll = inv_transform.transform(QgsPointXY(*r1_pt))
             r2_ll = inv_transform.transform(QgsPointXY(*r2_pt))
-            hop1_prof = analyze_link_profile(dem, config, u_loc["xy"], hu, r1_pt, config.relay_height_m, multi_link_mode)
-            hop2_prof = analyze_link_profile(dem, config, r1_pt, config.relay_height_m, r2_pt, config.relay_height_m, multi_link_mode)
-            hop3_prof = analyze_link_profile(dem, config, r2_pt, config.relay_height_m, v_loc["xy"], hv, multi_link_mode)
+            hop1_prof = analyze_link_profile(dem, config, u_loc["xy"], hu, r1_pt, r1_h, multi_link_mode)
+            hop2_prof = analyze_link_profile(dem, config, r1_pt, r1_h, r2_pt, r2_h, multi_link_mode)
+            hop3_prof = analyze_link_profile(dem, config, r2_pt, r2_h, v_loc["xy"], hv, multi_link_mode)
             e_r1, e_r2 = hop1_prof["end_elev_m"], hop2_prof["end_elev_m"]
             tot_2h_dist = hop1_prof["dist_m"] + hop2_prof["dist_m"] + hop3_prof["dist_m"]
 
@@ -111,24 +132,26 @@ def export_markdown_report(
                 f"| Node | Latitude, Longitude (WGS84) | {zone_label} (E, N) | Ground Elevation | Mount Height (AGL) | Total Tip Elevation (ASL) |",
                 "| :--- | :--- | :--- | :--- | :--- | :--- |",
                 f"| **{u_loc['name']}** | `{u_loc['lat']:.6f}, {u_loc['lon']:.6f}` | `E {u_loc['x']:.1f}, N {u_loc['y']:.1f}` | `{eu:.1f} m` (`{eu*3.28084:,.0f} ft`) | `{hu:.2f} m` (`{hu*3.28084:.0f} ft`) | `{eu+hu:.1f} m` (`{(eu+hu)*3.28084:,.0f} ft`) |",
-                f"| **2-Hop Relay 1** | `{r1_ll.y():.6f}, {r1_ll.x():.6f}` | `E {r1_pt[0]:.1f}, N {r1_pt[1]:.1f}` | `{e_r1:.1f} m` (`{e_r1*3.28084:,.0f} ft`) | `{config.relay_height_m:.1f} m` (`{relay_ft:.0f} ft`) | `{e_r1+config.relay_height_m:.1f} m` (`{(e_r1+config.relay_height_m)*3.28084:,.0f} ft`) |",
-                f"| **2-Hop Relay 2** | `{r2_ll.y():.6f}, {r2_ll.x():.6f}` | `E {r2_pt[0]:.1f}, N {r2_pt[1]:.1f}` | `{e_r2:.1f} m` (`{e_r2*3.28084:,.0f} ft`) | `{config.relay_height_m:.1f} m` (`{relay_ft:.0f} ft`) | `{e_r2+config.relay_height_m:.1f} m` (`{(e_r2+config.relay_height_m)*3.28084:,.0f} ft`) |",
+                f"| **{r1_name}** | `{r1_ll.y():.6f}, {r1_ll.x():.6f}` | `E {r1_pt[0]:.1f}, N {r1_pt[1]:.1f}` | `{e_r1:.1f} m` (`{e_r1*3.28084:,.0f} ft`) | `{r1_h:.1f} m` (`{r1_h*3.28084:.0f} ft`) | `{e_r1+r1_h:.1f} m` (`{(e_r1+r1_h)*3.28084:,.0f} ft`) |",
+                f"| **{r2_name}** | `{r2_ll.y():.6f}, {r2_ll.x():.6f}` | `E {r2_pt[0]:.1f}, N {r2_pt[1]:.1f}` | `{e_r2:.1f} m` (`{e_r2*3.28084:,.0f} ft`) | `{r2_h:.1f} m` (`{r2_h*3.28084:.0f} ft`) | `{e_r2+r2_h:.1f} m` (`{(e_r2+r2_h)*3.28084:,.0f} ft`) |",
                 f"| **{v_loc['name']}** | `{v_loc['lat']:.6f}, {v_loc['lon']:.6f}` | `E {v_loc['x']:.1f}, N {v_loc['y']:.1f}` | `{ev:.1f} m` (`{ev*3.28084:,.0f} ft`) | `{hv:.2f} m` (`{hv*3.28084:.0f} ft`) | `{ev+hv:.1f} m` (`{(ev+hv)*3.28084:,.0f} ft`) |",
                 "",
                 f"| Hop Segment | Distance | Min Terrain Clearance | Min 1st Fresnel ($F_1$) Clearance | {freq_label} MHz Free-Space Path Loss (FSPL) |",
                 "| :--- | :--- | :--- | :--- | :--- |",
-                f"| **Hop 1: {u_loc['name']} → Relay 1** | `{hop1_prof['dist_m']/1000.0:.2f} km` (`{hop1_prof['dist_m']*0.000621371:.2f} mi`) | `{hop1_prof['min_clearance_m']:.1f} m` (`{hop1_prof['min_clearance_m']*3.28084:.0f} ft`) | **`{hop1_prof['min_fresnel_ratio']*100:.0f}%`** | `{hop1_prof['fspl_db']:.1f} dB` |",
-                f"| **Hop 2: Relay 1 → Relay 2** | `{hop2_prof['dist_m']/1000.0:.2f} km` (`{hop2_prof['dist_m']*0.000621371:.2f} mi`) | `{hop2_prof['min_clearance_m']:.1f} m` (`{hop2_prof['min_clearance_m']*3.28084:.0f} ft`) | **`{hop2_prof['min_fresnel_ratio']*100:.0f}%`** | `{hop2_prof['fspl_db']:.1f} dB` |",
-                f"| **Hop 3: Relay 2 → {v_loc['name']}** | `{hop3_prof['dist_m']/1000.0:.2f} km` (`{hop3_prof['dist_m']*0.000621371:.2f} mi`) | `{hop3_prof['min_clearance_m']:.1f} m` (`{hop3_prof['min_clearance_m']*3.28084:.0f} ft`) | **`{hop3_prof['min_fresnel_ratio']*100:.0f}%`** | `{hop3_prof['fspl_db']:.1f} dB` |",
+                f"| **Hop 1: {u_loc['name']} → {r1_name}** | `{hop1_prof['dist_m']/1000.0:.2f} km` (`{hop1_prof['dist_m']*0.000621371:.2f} mi`) | `{hop1_prof['min_clearance_m']:.1f} m` (`{hop1_prof['min_clearance_m']*3.28084:.0f} ft`) | **`{hop1_prof['min_fresnel_ratio']*100:.0f}%`** | `{hop1_prof['fspl_db']:.1f} dB` |",
+                f"| **Hop 2: {r1_name} → {r2_name}** | `{hop2_prof['dist_m']/1000.0:.2f} km` (`{hop2_prof['dist_m']*0.000621371:.2f} mi`) | `{hop2_prof['min_clearance_m']:.1f} m` (`{hop2_prof['min_clearance_m']*3.28084:.0f} ft`) | **`{hop2_prof['min_fresnel_ratio']*100:.0f}%`** | `{hop2_prof['fspl_db']:.1f} dB` |",
+                f"| **Hop 3: {r2_name} → {v_loc['name']}** | `{hop3_prof['dist_m']/1000.0:.2f} km` (`{hop3_prof['dist_m']*0.000621371:.2f} mi`) | `{hop3_prof['min_clearance_m']:.1f} m` (`{hop3_prof['min_clearance_m']*3.28084:.0f} ft`) | **`{hop3_prof['min_fresnel_ratio']*100:.0f}%`** | `{hop3_prof['fspl_db']:.1f} dB` |",
                 f"| **Total 2-Hop Link** | **`{tot_2h_dist/1000.0:.2f} km`** (`{tot_2h_dist*0.000621371:.2f} mi`, `+{(tot_2h_dist/res['dist_m'] - 1.0)*100:.1f}%`) | `{min(hop1_prof['min_clearance_m'], hop2_prof['min_clearance_m'], hop3_prof['min_clearance_m']):.1f} m` worst-case | **`{min(hop1_prof['min_fresnel_ratio'], hop2_prof['min_fresnel_ratio'], hop3_prof['min_fresnel_ratio'])*100:.0f}%`** worst-case | Max hop: `{max(hop1_prof['fspl_db'], hop2_prof['fspl_db'], hop3_prof['fspl_db']):.1f} dB` |",
                 "",
             ])
 
         if res["best_1hop"] is not None:
             oh_pt = res["best_1hop"]["relay"]
+            oh_h = res["best_1hop"].get("relay_height_m", config.relay_height_m)
+            oh_name = res["best_1hop"].get("candidate_name") or f"1-Hop Relay ({pair_name})"
             oh_ll = inv_transform.transform(QgsPointXY(*oh_pt))
-            oh_leg1 = analyze_link_profile(dem, config, u_loc["xy"], hu, oh_pt, config.relay_height_m, multi_link_mode)
-            oh_leg2 = analyze_link_profile(dem, config, oh_pt, config.relay_height_m, v_loc["xy"], hv, multi_link_mode)
+            oh_leg1 = analyze_link_profile(dem, config, u_loc["xy"], hu, oh_pt, oh_h, multi_link_mode)
+            oh_leg2 = analyze_link_profile(dem, config, oh_pt, oh_h, v_loc["xy"], hv, multi_link_mode)
             e_oh = oh_leg1["end_elev_m"]
             tot_1h_dist = oh_leg1["dist_m"] + oh_leg2["dist_m"]
 
@@ -138,7 +161,7 @@ def export_markdown_report(
                 f"| Node | Latitude, Longitude (WGS84) | {zone_label} (E, N) | Ground Elevation | Mount Height (AGL) | Total Tip Elevation (ASL) |",
                 "| :--- | :--- | :--- | :--- | :--- | :--- |",
                 f"| **{u_loc['name']}** | `{u_loc['lat']:.6f}, {u_loc['lon']:.6f}` | `E {u_loc['x']:.1f}, N {u_loc['y']:.1f}` | `{eu:.1f} m` (`{eu*3.28084:,.0f} ft`) | `{hu:.2f} m` (`{hu*3.28084:.0f} ft`) | `{eu+hu:.1f} m` (`{(eu+hu)*3.28084:,.0f} ft`) |",
-                f"| **1-Hop Relay ({pair_name})** | `{oh_ll.y():.6f}, {oh_ll.x():.6f}` | `E {oh_pt[0]:.1f}, N {oh_pt[1]:.1f}` | `{e_oh:.1f} m` (`{e_oh*3.28084:,.0f} ft`) | `{config.relay_height_m:.1f} m` (`{relay_ft:.0f} ft`) | `{e_oh+config.relay_height_m:.1f} m` (`{(e_oh+config.relay_height_m)*3.28084:,.0f} ft`) |",
+                f"| **{oh_name}** | `{oh_ll.y():.6f}, {oh_ll.x():.6f}` | `E {oh_pt[0]:.1f}, N {oh_pt[1]:.1f}` | `{e_oh:.1f} m` (`{e_oh*3.28084:,.0f} ft`) | `{oh_h:.1f} m` (`{oh_h*3.28084:.0f} ft`) | `{e_oh+oh_h:.1f} m` (`{(e_oh+oh_h)*3.28084:,.0f} ft`) |",
                 f"| **{v_loc['name']}** | `{v_loc['lat']:.6f}, {v_loc['lon']:.6f}` | `E {v_loc['x']:.1f}, N {v_loc['y']:.1f}` | `{ev:.1f} m` (`{ev*3.28084:,.0f} ft`) | `{hv:.2f} m` (`{hv*3.28084:.0f} ft`) | `{ev+hv:.1f} m` (`{(ev+hv)*3.28084:,.0f} ft`) |",
                 "",
                 f"| Hop Segment | Distance | Min Terrain Clearance | Min 1st Fresnel ($F_1$) Clearance | {freq_label} MHz Free-Space Path Loss (FSPL) |",
@@ -148,6 +171,106 @@ def export_markdown_report(
                 f"| **Total 1-Hop Link ({pair_name})** | **`{tot_1h_dist/1000.0:.2f} km`** (`{tot_1h_dist*0.000621371:.2f} mi`, `+{(tot_1h_dist/res['dist_m'] - 1.0)*100:.1f}%`) | `{min(oh_leg1['min_clearance_m'], oh_leg2['min_clearance_m']):.1f} m` worst-case | **`{min(oh_leg1['min_fresnel_ratio'], oh_leg2['min_fresnel_ratio'])*100:.0f}%`** worst-case | Max leg: `{max(oh_leg1['fspl_db'], oh_leg2['fspl_db']):.1f} dB` |",
                 "",
             ])
+
+        if res.get("explicit_candidates"):
+            md_lines.extend([
+                f"### Explicit Candidate Relay Evaluation ({pair_name})",
+                "",
+            ])
+            if profiles_filename:
+                md_lines.extend([
+                    f"![Candidate Terrain & Line-of-Sight Profiles]({profiles_filename})",
+                    "",
+                ])
+            md_lines.extend([
+                f"| Candidate Site | Coordinates (Lat, Lon) | Ground Elev | Mount (AGL) | Leg 1 ({u_loc['name']} → C) | Leg 2 (C → {v_loc['name']}) | 1-Hop Verdict | Total Path |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            ])
+            for ec in res["explicit_candidates"]:
+                l1, l2 = ec["leg1"], ec["leg2"]
+                l1_tag = (
+                    f"CLEAR: `{l1['min_fresnel_ratio']*100:.0f}%` F1 (`{l1['min_clearance_m']:.1f} m`, `{l1['dist_m']/1000.0:.2f} km`, `{l1['fspl_db']:.1f} dB`)"
+                    if l1["clear"]
+                    else f"BLOCKED (`{l1['min_clearance_m']:.1f} m`, `{l1['dist_m']/1000.0:.2f} km`)"
+                )
+                l2_tag = (
+                    f"CLEAR: `{l2['min_fresnel_ratio']*100:.0f}%` F1 (`{l2['min_clearance_m']:.1f} m`, `{l2['dist_m']/1000.0:.2f} km`, `{l2['fspl_db']:.1f} dB`)"
+                    if l2["clear"]
+                    else f"BLOCKED (`{l2['min_clearance_m']:.1f} m`, `{l2['dist_m']/1000.0:.2f} km`)"
+                )
+                verdict = (
+                    f"**VIABLE (`{ec['min_fresnel']*100:.0f}%` F1)**"
+                    if ec["viable"]
+                    else f"BLOCKED (`{ec['min_clear_m']:.1f} m`)"
+                )
+                md_lines.append(
+                    f"| **{ec['name']}** | `{ec['lat']:.6f}, {ec['lon']:.6f}` | `{ec['elev_m']:.1f} m` (`{ec['elev_m']*3.28084:,.0f} ft`) | "
+                    f"`{ec['height_m']:.2f} m` (`{ec['height_m']*3.28084:.0f} ft`) | {l1_tag} | {l2_tag} | {verdict} | "
+                    f"`{ec['total_dist']/1000.0:.2f} km` |"
+                )
+            md_lines.append("")
+
+        if res.get("explicit_sensitivity"):
+            for es_tbl in res["explicit_sensitivity"]:
+                cand_names = [c["name"] for c in es_tbl["rows"][0]["candidates"]]
+                header_cols = " | ".join(cand_names)
+                sep_cols = " | ".join(":---" for _ in cand_names)
+                md_lines.extend([
+                    f"### Explicit Candidate Sensitivity to {es_tbl['varied_name']} Repeater Height",
+                    "",
+                    f"| {es_tbl['varied_name']} Height | {header_cols} |",
+                    f"| :--- | {sep_cols} |",
+                ])
+                for row in es_tbl["rows"]:
+                    cells = []
+                    for c_res in row["candidates"]:
+                        if c_res["viable"]:
+                            cells.append(f"**VIABLE `{c_res['min_fresnel']*100:.0f}%` F1** (`{c_res['min_clear_m']:.1f} m`)")
+                        else:
+                            l1_s = "L1 OK" if c_res["leg1_clear"] else "L1 blk"
+                            l2_s = "L2 OK" if c_res["leg2_clear"] else "L2 blk"
+                            cells.append(f"Blocked ({l1_s}, {l2_s}; `{c_res['min_clear_m']:.1f} m`)")
+                    md_lines.append(f"| **{row['label']}** | {' | '.join(cells)} |")
+                md_lines.append("")
+
+        if res.get("explicit_2hop_pairs"):
+            viable_pairs = [p for p in res["explicit_2hop_pairs"] if p["viable"]]
+            display_pairs = viable_pairs if viable_pairs else res["explicit_2hop_pairs"][:6]
+            md_lines.extend([
+                f"### Explicit Candidate 2-Hop Pair Evaluation ({pair_name})",
+                "",
+                f"| Relay 1 -> Relay 2 | Hop 1 ({u_loc['name']} → R1) | Hop 2 (R1 → R2) | Hop 3 (R2 → {v_loc['name']}) | Verdict | Total Path |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- |",
+            ])
+            for p in display_pairs:
+                h1, h2, h3 = p["hop1"], p["hop2"], p["hop3"]
+                h1_s = f"CLEAR `{h1['min_fresnel_ratio']*100:.0f}%`" if h1["clear"] else f"BLK `{h1['min_clearance_m']:.1f} m`"
+                h2_s = f"CLEAR `{h2['min_fresnel_ratio']*100:.0f}%`" if h2["clear"] else f"BLK `{h2['min_clearance_m']:.1f} m`"
+                h3_s = f"CLEAR `{h3['min_fresnel_ratio']*100:.0f}%`" if h3["clear"] else f"BLK `{h3['min_clearance_m']:.1f} m`"
+                v_s = f"**VIABLE (`{p['min_fresnel']*100:.0f}%` F1)**" if p["viable"] else f"Blocked (`{p['min_clear_m']:.1f} m`)"
+                md_lines.append(
+                    f"| **{p['c1_name']}** → **{p['c2_name']}** | {h1_s} | {h2_s} | {h3_s} | {v_s} | `{p['total_dist']/1000.0:.2f} km` |"
+                )
+            md_lines.append("")
+
+        if res.get("hybrid_2hop"):
+            top_hyb = res["hybrid_2hop"][:10]
+            md_lines.extend([
+                f"### Top Hybrid 2-Hop Solutions (1 Explicit Candidate + 1 Grid Relay, {pair_name})",
+                "",
+                "| Rank | Relay 1 | Relay 2 | Hop 1 $F_1$ | Hop 2 $F_1$ | Hop 3 $F_1$ | Worst-Case $F_1$ | Total Path |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            ])
+            for h_idx, sol in enumerate(top_hyb, 1):
+                p1_ll = inv_transform.transform(QgsPointXY(*sol["r1"]))
+                p2_ll = inv_transform.transform(QgsPointXY(*sol["r2"]))
+                r1_desc = f"**{sol['r1_name']}**" if sol["r1_name"] != "Grid Relay" else f"Grid (`{p1_ll.y():.5f}, {p1_ll.x():.5f}`)"
+                r2_desc = f"**{sol['r2_name']}**" if sol["r2_name"] != "Grid Relay" else f"Grid (`{p2_ll.y():.5f}, {p2_ll.x():.5f}`)"
+                md_lines.append(
+                    f"| `#{h_idx}` | {r1_desc} | {r2_desc} | `{sol['f1_u']*100:.0f}%` | `{sol['f1_12']*100:.0f}%` | `{sol['f1_v']*100:.0f}%` | "
+                    f"**`{sol['min_fresnel']*100:.0f}%`** (`{sol['min_clear_m']:.1f} m`) | `{sol['total_dist']/1000.0:.2f} km` |"
+                )
+            md_lines.append("")
 
         for tbl in res["sensitivity_tables"]:
             md_lines.extend([
