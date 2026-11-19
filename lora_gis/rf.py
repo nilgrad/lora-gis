@@ -1,6 +1,6 @@
 """RF propagation, Line-of-Sight (LOS), Fresnel Zone, FSPL, and 1-Hop/2-Hop grid solver."""
 
-from typing import Dict, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from .config import HEIGHT_SENSITIVITY_SCENARIOS, LoRaGISConfig
@@ -32,6 +32,7 @@ def analyze_link_profile(
     p2: Tuple[float, float],
     h2: float,
     multi_link_mode: bool = False,
+    include_profile: bool = False,
 ) -> Dict:
     """
     Evaluates a single link segment (p1 -> p2) including:
@@ -73,12 +74,14 @@ def analyze_link_profile(
 
     clearance = sightline - (ground + earth_bulge)
     interior_clear = clearance[1:-1]
-    min_clearance_m = float(np.min(interior_clear))
+    min_rel_idx = int(np.argmin(interior_clear))
+    worst_idx = min_rel_idx + 1
+    min_clearance_m = float(interior_clear[min_rel_idx])
 
     f1_radius = np.sqrt(config.wavelength_m * d1[1:-1] * d2[1:-1] / max(dist_m, 1.0))
     min_fresnel_ratio = float(np.min(interior_clear / np.maximum(f1_radius, 0.01)))
 
-    return {
+    result = {
         "clear": min_clearance_m > 0.0,
         "min_clearance_m": min_clearance_m,
         "min_fresnel_ratio": min_fresnel_ratio,
@@ -87,6 +90,24 @@ def analyze_link_profile(
         "start_elev_m": float(ground[0]),
         "end_elev_m": float(ground[-1]),
     }
+
+    if include_profile:
+        f1_full = np.sqrt(config.wavelength_m * d1 * d2 / max(dist_m, 1.0))
+        eff_terrain = ground + earth_bulge
+        result["profile"] = {
+            "dist_km": (d1 / 1000.0).tolist(),
+            "terrain_m": eff_terrain.tolist(),
+            "sightline_m": sightline.tolist(),
+            "f1_radius_m": f1_full.tolist(),
+            "clearance_m": clearance.tolist(),
+            "worst_idx": worst_idx,
+            "worst_xy": (float(xs[worst_idx]), float(ys[worst_idx])),
+            "worst_dist_km": float(d1[worst_idx] / 1000.0),
+            "worst_terrain_m": float(eff_terrain[worst_idx]),
+            "worst_sightline_m": float(sightline[worst_idx]),
+        }
+
+    return result
 
 
 def evaluate_segments_vectorized(
@@ -168,6 +189,7 @@ def analyze_link(
     multi_link_mode: bool,
     allow_2hop: bool = False,
     headless_cli: bool = True,
+    candidate_keys: Optional[List[str]] = None,
 ) -> Dict:
     """Runs multi-resolution 1-hop (and optional 2-hop) relay discovery and hub height sensitivity."""
     from qgis.core import QgsPointXY
@@ -357,6 +379,226 @@ def analyze_link(
         progress.close()
         current_grid_step *= config.step_factor
 
+    explicit_candidates: List[Dict] = []
+    explicit_2hop_pairs: List[Dict] = []
+    hybrid_2hop: List[Dict] = []
+    explicit_sensitivity: List[Dict] = []
+    valid_cand_keys = [k for k in (candidate_keys or []) if k != u_key and k != v_key]
+
+    if valid_cand_keys and not user_cancelled:
+        cand_eval_map: Dict[str, Dict] = {}
+        print(f"  Evaluating {len(valid_cand_keys)} explicit candidate relay site(s)...", flush=True)
+        for c_key in valid_cand_keys:
+            c_loc = config.locations[c_key]
+            c_xy = c_loc["xy"]
+            hc = c_loc["height_m"]
+            leg1 = analyze_link_profile(
+                dem, config, (ux, uy), hu, c_xy, hc, multi_link_mode=False, include_profile=True
+            )
+            leg2 = analyze_link_profile(
+                dem, config, c_xy, hc, (vx, vy), hv, multi_link_mode=False, include_profile=True
+            )
+            viable = bool(leg1["clear"] and leg2["clear"])
+            tot_d = leg1["dist_m"] + leg2["dist_m"]
+            min_f1 = float(min(leg1["min_fresnel_ratio"], leg2["min_fresnel_ratio"]))
+            min_clr = float(min(leg1["min_clearance_m"], leg2["min_clearance_m"]))
+            entry = {
+                "key": c_key,
+                "name": c_loc["name"],
+                "lat": c_loc["lat"],
+                "lon": c_loc["lon"],
+                "xy": c_xy,
+                "elev_m": leg1["end_elev_m"],
+                "height_m": hc,
+                "leg1": leg1,
+                "leg2": leg2,
+                "viable": viable,
+                "total_dist": tot_d,
+                "min_fresnel": min_f1,
+                "min_clear_m": min_clr,
+                "max_fspl_db": max(leg1["fspl_db"], leg2["fspl_db"]),
+            }
+            explicit_candidates.append(entry)
+            cand_eval_map[c_key] = entry
+            l1_desc = "OK" if leg1["clear"] else f"{leg1['min_clearance_m']:.1f}m"
+            l2_desc = "OK" if leg2["clear"] else f"{leg2['min_clearance_m']:.1f}m"
+            status_lbl = (
+                f"VIABLE (Min F1: {min_f1*100:.0f}%, Path: {tot_d/1000.0:.2f} km)"
+                if viable
+                else f"BLOCKED (Leg1: {l1_desc}, Leg2: {l2_desc})"
+            )
+            print(f"    [Candidate] {c_loc['name']} ({hc*3.28084:.0f} ft): {status_lbl}", flush=True)
+            if viable:
+                viable_relays.add(c_xy)
+                key = (round(c_xy[0], 1), round(c_xy[1], 1))
+                discovered_1hop[key] = {
+                    "relay": c_xy,
+                    "total_dist": tot_d,
+                    "min_fresnel": min_f1,
+                    "min_clear_m": min_clr,
+                    "f1_u": float(leg1["min_fresnel_ratio"]),
+                    "f1_v": float(leg2["min_fresnel_ratio"]),
+                    "clr_u": float(leg1["min_clearance_m"]),
+                    "clr_v": float(leg2["min_clearance_m"]),
+                    "candidate_key": c_key,
+                    "candidate_name": c_loc["name"],
+                    "relay_height_m": hc,
+                }
+
+        if allow_2hop and len(valid_cand_keys) >= 2:
+            for c1_key in valid_cand_keys:
+                e1 = cand_eval_map[c1_key]
+                for c2_key in valid_cand_keys:
+                    if c1_key == c2_key:
+                        continue
+                    e2 = cand_eval_map[c2_key]
+                    mid = analyze_link_profile(
+                        dem, config, e1["xy"], e1["height_m"], e2["xy"], e2["height_m"], multi_link_mode=False
+                    )
+                    viable_2h = bool(e1["leg1"]["clear"] and mid["clear"] and e2["leg2"]["clear"])
+                    tot_d = e1["leg1"]["dist_m"] + mid["dist_m"] + e2["leg2"]["dist_m"]
+                    min_f1 = float(
+                        min(e1["leg1"]["min_fresnel_ratio"], mid["min_fresnel_ratio"], e2["leg2"]["min_fresnel_ratio"])
+                    )
+                    min_clr = float(
+                        min(e1["leg1"]["min_clearance_m"], mid["min_clearance_m"], e2["leg2"]["min_clearance_m"])
+                    )
+                    pair_entry = {
+                        "c1_key": c1_key,
+                        "c2_key": c2_key,
+                        "c1_name": e1["name"],
+                        "c2_name": e2["name"],
+                        "r1": e1["xy"],
+                        "r2": e2["xy"],
+                        "r1_height_m": e1["height_m"],
+                        "r2_height_m": e2["height_m"],
+                        "hop1": e1["leg1"],
+                        "hop2": mid,
+                        "hop3": e2["leg2"],
+                        "viable": viable_2h,
+                        "total_dist": tot_d,
+                        "min_fresnel": min_f1,
+                        "min_clear_m": min_clr,
+                    }
+                    explicit_2hop_pairs.append(pair_entry)
+                    if viable_2h:
+                        viable_relays.add(e1["xy"])
+                        viable_relays.add(e2["xy"])
+                        pair_key = (
+                            round(e1["xy"][0], 1),
+                            round(e1["xy"][1], 1),
+                            round(e2["xy"][0], 1),
+                            round(e2["xy"][1], 1),
+                        )
+                        discovered_2hop[pair_key] = {
+                            "r1": e1["xy"],
+                            "r2": e2["xy"],
+                            "total_dist": tot_d,
+                            "min_fresnel": min_f1,
+                            "min_clear_m": min_clr,
+                            "f1_u": float(e1["leg1"]["min_fresnel_ratio"]),
+                            "f1_12": float(mid["min_fresnel_ratio"]),
+                            "f1_v": float(e2["leg2"]["min_fresnel_ratio"]),
+                            "r1_name": e1["name"],
+                            "r2_name": e2["name"],
+                            "r1_height_m": e1["height_m"],
+                            "r2_height_m": e2["height_m"],
+                        }
+
+            explicit_2hop_pairs.sort(
+                key=lambda s: (0, rank_solution_key(s, config, multi_link_mode))
+                if s["viable"]
+                else (1, -s["min_fresnel"], s["total_dist"])
+            )
+
+        if allow_2hop and not direct_clear and combined_unique_pts:
+            full_list_h = list(combined_unique_pts.values())
+            full_arr_h = np.array(full_list_h, dtype=np.float64)
+            pt_u_h = np.repeat([[ux, uy]], len(full_list_h), axis=0)
+            pt_v_h = np.repeat([[vx, vy]], len(full_list_h), axis=0)
+            ok_u_g, clr_u_g, f1_u_g = evaluate_segments_vectorized(
+                dem, config, pt_u_h, hu, full_arr_h, config.relay_height_m
+            )
+            ok_v_g, clr_v_g, f1_v_g = evaluate_segments_vectorized(
+                dem, config, full_arr_h, config.relay_height_m, pt_v_h, hv
+            )
+            u_vis_idx = np.where(ok_u_g)[0]
+            v_vis_idx = np.where(ok_v_g)[0]
+
+            for c_key in valid_cand_keys:
+                ev = cand_eval_map[c_key]
+                c_xy = ev["xy"]
+                hc = ev["height_m"]
+                if ev["leg1"]["clear"] and len(v_vis_idx) > 0:
+                    target_pts = full_arr_h[v_vis_idx]
+                    c_arr = np.repeat([[c_xy[0], c_xy[1]]], len(v_vis_idx), axis=0)
+                    ok_m, clr_m, f1_m = evaluate_segments_vectorized(
+                        dem, config, c_arr, hc, target_pts, config.relay_height_m
+                    )
+                    for pos in np.where(ok_m)[0]:
+                        g_idx = v_vis_idx[pos]
+                        g_pt = full_list_h[g_idx]
+                        d_mid = float(np.hypot(g_pt[0] - c_xy[0], g_pt[1] - c_xy[1]))
+                        if d_mid < config.min_relay_separation_m:
+                            continue
+                        d_v = float(np.hypot(vx - g_pt[0], vy - g_pt[1]))
+                        tot_d = ev["leg1"]["dist_m"] + d_mid + d_v
+                        min_f1 = float(min(ev["leg1"]["min_fresnel_ratio"], f1_m[pos], f1_v_g[g_idx]))
+                        min_clr = float(min(ev["leg1"]["min_clearance_m"], clr_m[pos], clr_v_g[g_idx]))
+                        sol_h = {
+                            "r1": c_xy,
+                            "r2": g_pt,
+                            "r1_name": ev["name"],
+                            "r2_name": "Grid Relay",
+                            "r1_height_m": hc,
+                            "r2_height_m": config.relay_height_m,
+                            "total_dist": tot_d,
+                            "min_fresnel": min_f1,
+                            "min_clear_m": min_clr,
+                            "f1_u": float(ev["leg1"]["min_fresnel_ratio"]),
+                            "f1_12": float(f1_m[pos]),
+                            "f1_v": float(f1_v_g[g_idx]),
+                        }
+                        hybrid_2hop.append(sol_h)
+                        pair_key = (round(c_xy[0], 1), round(c_xy[1], 1), round(g_pt[0], 1), round(g_pt[1], 1))
+                        discovered_2hop[pair_key] = sol_h
+
+                if ev["leg2"]["clear"] and len(u_vis_idx) > 0:
+                    source_pts = full_arr_h[u_vis_idx]
+                    c_arr = np.repeat([[c_xy[0], c_xy[1]]], len(u_vis_idx), axis=0)
+                    ok_m, clr_m, f1_m = evaluate_segments_vectorized(
+                        dem, config, source_pts, config.relay_height_m, c_arr, hc
+                    )
+                    for pos in np.where(ok_m)[0]:
+                        g_idx = u_vis_idx[pos]
+                        g_pt = full_list_h[g_idx]
+                        d_mid = float(np.hypot(c_xy[0] - g_pt[0], c_xy[1] - g_pt[1]))
+                        if d_mid < config.min_relay_separation_m:
+                            continue
+                        d_u = float(np.hypot(g_pt[0] - ux, g_pt[1] - uy))
+                        tot_d = d_u + d_mid + ev["leg2"]["dist_m"]
+                        min_f1 = float(min(f1_u_g[g_idx], f1_m[pos], ev["leg2"]["min_fresnel_ratio"]))
+                        min_clr = float(min(clr_u_g[g_idx], clr_m[pos], ev["leg2"]["min_clearance_m"]))
+                        sol_h = {
+                            "r1": g_pt,
+                            "r2": c_xy,
+                            "r1_name": "Grid Relay",
+                            "r2_name": ev["name"],
+                            "r1_height_m": config.relay_height_m,
+                            "r2_height_m": hc,
+                            "total_dist": tot_d,
+                            "min_fresnel": min_f1,
+                            "min_clear_m": min_clr,
+                            "f1_u": float(f1_u_g[g_idx]),
+                            "f1_12": float(f1_m[pos]),
+                            "f1_v": float(ev["leg2"]["min_fresnel_ratio"]),
+                        }
+                        hybrid_2hop.append(sol_h)
+                        pair_key = (round(g_pt[0], 1), round(g_pt[1], 1), round(c_xy[0], 1), round(c_xy[1], 1))
+                        discovered_2hop[pair_key] = sol_h
+
+            hybrid_2hop.sort(key=lambda s: rank_solution_key(s, config, multi_link_mode))
+
     ranked_1hop = sorted(discovered_1hop.values(), key=lambda s: rank_solution_key(s, config, multi_link_mode))
     best_1hop = ranked_1hop[0] if ranked_1hop else None
     if best_1hop is not None:
@@ -453,6 +695,41 @@ def analyze_link(
                 "rows": rows,
             })
 
+            if valid_cand_keys:
+                cand_sens_rows = []
+                for s_label, h_val in HEIGHT_SENSITIVITY_SCENARIOS:
+                    per_cand = []
+                    for c_key in valid_cand_keys:
+                        c_loc = config.locations[c_key]
+                        c_xy = c_loc["xy"]
+                        hc = c_loc["height_m"]
+                        if side == "u":
+                            l1 = analyze_link_profile(dem, config, (ux, uy), h_val, c_xy, hc, multi_link_mode=False)
+                            l2 = analyze_link_profile(dem, config, c_xy, hc, (vx, vy), hv, multi_link_mode=False)
+                        else:
+                            l1 = analyze_link_profile(dem, config, (ux, uy), hu, c_xy, hc, multi_link_mode=False)
+                            l2 = analyze_link_profile(dem, config, c_xy, hc, (vx, vy), h_val, multi_link_mode=False)
+                        per_cand.append({
+                            "key": c_key,
+                            "name": c_loc["name"],
+                            "viable": bool(l1["clear"] and l2["clear"]),
+                            "min_fresnel": float(min(l1["min_fresnel_ratio"], l2["min_fresnel_ratio"])),
+                            "min_clear_m": float(min(l1["min_clearance_m"], l2["min_clearance_m"])),
+                            "leg1_clear": bool(l1["clear"]),
+                            "leg2_clear": bool(l2["clear"]),
+                        })
+                    cand_sens_rows.append({
+                        "label": f"{s_label} at {varied_loc['name']}",
+                        "h_m": h_val,
+                        "candidates": per_cand,
+                    })
+                explicit_sensitivity.append({
+                    "varied_key": h_key,
+                    "varied_name": varied_loc["name"],
+                    "fixed_name": fixed_loc["name"],
+                    "rows": cand_sens_rows,
+                })
+
     return {
         "u_key": u_key,
         "v_key": v_key,
@@ -471,5 +748,9 @@ def analyze_link(
         "viable_relays": viable_relays,
         "step_stats": step_stats,
         "sensitivity_tables": sensitivity_tables,
+        "explicit_candidates": explicit_candidates,
+        "explicit_2hop_pairs": explicit_2hop_pairs,
+        "hybrid_2hop": hybrid_2hop,
+        "explicit_sensitivity": explicit_sensitivity,
         "user_cancelled": user_cancelled,
     }

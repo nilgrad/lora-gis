@@ -5,6 +5,7 @@
 A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** and automated topographic map renderer. Designed to route off-grid radio links across mountainous terrain using high-resolution Digital Elevation Models (DEMs).
 
 - **1-Hop & 2-Hop Repeater Discovery**: Scans candidate grids from coarse (`500 m`) down to fine (`150 m`) resolution to discover both **single-repeater (`1-hop`)** and **two-repeater (`2-hop`)** sightline paths when direct line-of-sight is blocked by terrain.
+- **Explicit Candidate Relay Evaluation**: Test specific known coordinates or properties (`--candidates`) alongside the grid search, with leg-by-leg clearance/Fresnel metrics, candidate-to-candidate 2-hop pairs, hybrid (candidate + grid) 2-hop combinations, and dedicated map markers.
 - **Topology-Based Multi-Leg & Mesh Routing**: Define sequential routes (`--route`), explicit point-to-point mesh links (`--links`), or JSON topology configs (`--config`), with automatic repeater mount-height sensitivity tables (`30 ft` to `90 ft`) for intermediate hub nodes.
 - **LoRa RF Propagation Modeling**: Evaluates **1st Fresnel Zone ($F_1$) clearance** at `915 MHz` (US915), `868 MHz` (EU868), or `433 MHz`, **4/3 effective Earth curvature + atmospheric refraction**, minimum terrain clearance, and **Free-Space Path Loss (FSPL in dB)** along every hop.
 - **Multi-Source DEM & Automatic UTM Projection**: Automatically detects the local metric UTM zone (`EPSG:269xx` / `326xx` / `327xx`) and streams 32-bit float elevation grids from **USGS 3DEP** (nationwide US), state GIS servers (`ny-gis`), custom ArcGIS ImageServers, or local GeoTIFF DEM files.
@@ -122,12 +123,28 @@ Run it with:
 python3 -m lora_gis --config network.json
 ```
 
+### 4. Explicit Candidate Relay Evaluation (`--candidates`)
+
+Pass known relay candidate locations (catalog slugs or inline `name=lat,lon` coordinates) to evaluate them directly at their exact coordinates alongside the grid search:
+
+```bash
+python3 -m lora_gis --state NY \
+  --route "Willowemoc, NY" "Livingston Manor, NY" \
+  --hops 2 \
+  --candidates site1=41.8926,-74.7838 site2=41.8905,-74.6927 \
+  --candidate-height 30ft
+```
+
+Explicit candidates can also be configured in JSON via `"candidate_relays"` and `"candidate_height"`. The DEM bounding box and map extent automatically expand to cover all candidates, and the report includes leg-by-leg clearance tables, hub height sensitivity, 2-hop candidate pairs, and hybrid (candidate + grid) 2-hop solutions.
+
 ### CLI Options Reference
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
 | `--route`, `-r` | Ordered sequence of 2+ locations forming a route | — |
 | `--links`, `-l` | Explicit `LOC1:LOC2` point-to-point link pairs | — |
+| `--candidates`, `--candidate-relays` | Explicit candidate relay locations (`slug` or `name=lat,lon`) evaluated alongside the grid search | None |
+| `--candidate-height` | Mount height override for explicit candidate relays (`ft` or `m`) | Predefined location height or `--relay-height` |
 | `--height`, `-H` | Override antenna height per location (`LOC=30ft` or `LOC=10m`) | — |
 | `--hops` | Maximum intermediate relays per link (`1` or `2`) | `2` (single link), `1` (multi-link) |
 | `--freq-mhz` | LoRa operating frequency in MHz (`915.0`, `868.0`, `433.0`) | `915.0` |
