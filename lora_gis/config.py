@@ -59,12 +59,14 @@ class LoRaGISConfig:
     locations: Dict[str, Dict] = field(default_factory=dict)
     default_route: List[str] = field(default_factory=list)
     default_links: List[Tuple[str, str]] = field(default_factory=list)
+    candidate_relays: List[str] = field(default_factory=list)
     default_state: Optional[str] = None
 
     # Antenna & repeater heights (meters)
     default_observer_height_m: float = 10.0   # ~33 ft
     default_repeater_height_m: float = 9.14   # ~30 ft (intermediate hub repeater)
     relay_height_m: float = 18.3              # ~60 ft (tree/mast intermediate relay)
+    candidate_height_m: Optional[float] = None  # Optional override for explicit candidate relays
 
     # RF propagation parameters
     freq_mhz: float = 915.0
@@ -100,6 +102,7 @@ class LoRaGISConfig:
 
     # Runtime populated fields
     active_links: List[Tuple[str, str]] = field(default_factory=list)
+    active_candidate_keys: List[str] = field(default_factory=list)
     custom_height_keys: set = field(default_factory=set)
 
     @property
@@ -125,6 +128,8 @@ class LoRaGISConfig:
             self.min_fresnel_clearance = float(data["min_fresnel_clearance"])
         if "relay_height" in data:
             self.relay_height_m = parse_height_value_m(data["relay_height"])
+        if "candidate_height" in data:
+            self.candidate_height_m = parse_height_value_m(data["candidate_height"])
         if "observer_height" in data:
             self.default_observer_height_m = parse_height_value_m(data["observer_height"])
         if "repeater_height" in data:
@@ -156,3 +161,5 @@ class LoRaGISConfig:
             self.default_route = [str(x) for x in data["route"]]
         if "links" in data:
             self.default_links = [(str(pair[0]), str(pair[1])) for pair in data["links"]]
+        if "candidate_relays" in data:
+            self.candidate_relays = [str(x) for x in data["candidate_relays"]]

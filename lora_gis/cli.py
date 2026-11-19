@@ -47,6 +47,17 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
         help="Explicit point-to-point link pairs (e.g., --links node1:node2 node2:node3)",
     )
     parser.add_argument(
+        "--candidates", "--candidate-relays",
+        nargs="+",
+        metavar="LOCATION",
+        help="Explicit candidate relay locations to evaluate alongside the grid search (catalog slug or 'name=lat,lon')",
+    )
+    parser.add_argument(
+        "--candidate-height",
+        default=None,
+        help="Mount height override for explicit candidate relays, e.g. '30ft' or '9.14m'",
+    )
+    parser.add_argument(
         "--height", "-H",
         nargs="+",
         metavar="LOC=HEIGHT",
@@ -131,6 +142,18 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_candidate_token(tok: str, config: LoRaGISConfig) -> str:
+    """Resolves a candidate relay location token and applies candidate height defaults."""
+    existing_keys = set(config.locations.keys())
+    key = resolve_location(tok, config)
+    if key not in config.custom_height_keys:
+        if config.candidate_height_m is not None:
+            config.locations[key]["height_m"] = config.candidate_height_m
+        elif key not in existing_keys:
+            config.locations[key]["height_m"] = config.relay_height_m
+    return key
+
+
 def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> LoRaGISConfig:
     """Parses CLI arguments and applies overrides to `config`."""
     parser = build_arg_parser(config.title)
@@ -147,6 +170,8 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.freq_mhz = args.freq_mhz
     if args.relay_height is not None:
         config.relay_height_m = parse_height_value_m(args.relay_height)
+    if args.candidate_height is not None:
+        config.candidate_height_m = parse_height_value_m(args.candidate_height)
     if args.observer_height is not None:
         old_obs = config.default_observer_height_m
         new_obs = parse_height_value_m(args.observer_height)
@@ -188,6 +213,12 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
             if pair not in config.active_links and (pair[1], pair[0]) not in config.active_links:
                 config.active_links.append(pair)
 
+    if args.candidates:
+        for cand_tok in args.candidates:
+            cand_key = _resolve_candidate_token(cand_tok, config)
+            if cand_key not in config.active_candidate_keys:
+                config.active_candidate_keys.append(cand_key)
+
     if args.height:
         for h_item in args.height:
             if "=" not in h_item:
@@ -217,10 +248,11 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 "Error: No route or links specified. Pass '--route LOC1 LOC2', '--links LOC1:LOC2', or '--config FILE'."
             )
 
-    multi_link_mode = len(config.active_links) > 1 or len(config.custom_height_keys) > 0
-    enable_2hop = (
-        (config.hops_override == 2) if config.hops_override is not None else (not multi_link_mode)
-    )
+    if not config.active_candidate_keys and config.candidate_relays:
+        for cand_tok in config.candidate_relays:
+            cand_key = _resolve_candidate_token(cand_tok, config)
+            if cand_key not in config.active_candidate_keys:
+                config.active_candidate_keys.append(cand_key)
 
     node_degree: Dict[str, int] = {}
     active_location_keys: List[str] = []
@@ -232,7 +264,13 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
         if v_key not in active_location_keys:
             active_location_keys.append(v_key)
 
-    hub_repeater_keys = set(config.custom_height_keys)
+    endpoint_custom_heights = {k for k in config.custom_height_keys if k in active_location_keys}
+    multi_link_mode = len(config.active_links) > 1 or len(endpoint_custom_heights) > 0
+    enable_2hop = (
+        (config.hops_override == 2) if config.hops_override is not None else (not multi_link_mode)
+    )
+
+    hub_repeater_keys = set(endpoint_custom_heights)
     if len(config.active_links) > 1:
         for k, deg in node_degree.items():
             if deg >= 2:
@@ -317,6 +355,20 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 flush=True,
             )
 
+        for k in config.active_candidate_keys:
+            if k in active_location_keys:
+                continue
+            loc = config.locations[k]
+            pt_utm = transform.transform(QgsPointXY(loc["lon"], loc["lat"]))
+            loc["x"] = float(pt_utm.x())
+            loc["y"] = float(pt_utm.y())
+            loc["xy"] = (loc["x"], loc["y"])
+            print(
+                f"Projected {loc['name']:<16} ({zone_label}): E {loc['x']:.2f}, N {loc['y']:.2f} "
+                f"(Candidate Relay Height: {loc['height_m']:.2f} m / {loc['height_m']*3.28084:.0f} ft)",
+                flush=True,
+            )
+
         for u_key, v_key in config.active_links:
             u_loc, v_loc = config.locations[u_key], config.locations[v_key]
             dist_km = np.hypot(v_loc["x"] - u_loc["x"], v_loc["y"] - u_loc["y"]) / 1000.0
@@ -336,8 +388,11 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             dem_file=config.dem_file,
         )
 
-        all_xs = [config.locations[k]["x"] for k in active_location_keys]
-        all_ys = [config.locations[k]["y"] for k in active_location_keys]
+        all_dem_keys = list(active_location_keys) + [
+            k for k in config.active_candidate_keys if k not in active_location_keys
+        ]
+        all_xs = [config.locations[k]["x"] for k in all_dem_keys]
+        all_ys = [config.locations[k]["y"] for k in all_dem_keys]
         max_link_pad = max(
             compute_link_padding(config.locations[u], config.locations[v], config)
             for u, v in config.active_links
@@ -368,6 +423,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 multi_link_mode=multi_link_mode,
                 allow_2hop=enable_2hop,
                 headless_cli=headless_cli,
+                candidate_keys=config.active_candidate_keys,
             )
             link_results.append(res)
             all_viable_relays.update(res["viable_relays"])
@@ -378,7 +434,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
         any_solution = any(
             r["best_1hop"] is not None or r["best_2hop"] is not None or r["direct_clear"]
             for r in link_results
-        )
+        ) or bool(config.active_candidate_keys)
 
         if any_solution and not user_cancelled:
             peaks_list, towns_list, peak_elevs = render_topographic_map(
@@ -394,6 +450,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 inv_transform=inv_transform,
                 timestamp_str=timestamp_str,
                 png_output_path=png_output_path,
+                candidate_keys=config.active_candidate_keys,
             )
 
             export_markdown_report(
@@ -412,6 +469,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 timestamp_str=timestamp_str,
                 png_filename=png_filename,
                 md_output_path=md_output_path,
+                candidate_keys=config.active_candidate_keys,
             )
 
         return {
