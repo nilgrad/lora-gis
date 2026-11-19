@@ -32,6 +32,7 @@ def analyze_link_profile(
     p2: Tuple[float, float],
     h2: float,
     multi_link_mode: bool = False,
+    include_profile: bool = False,
 ) -> Dict:
     """
     Evaluates a single link segment (p1 -> p2) including:
@@ -73,12 +74,14 @@ def analyze_link_profile(
 
     clearance = sightline - (ground + earth_bulge)
     interior_clear = clearance[1:-1]
-    min_clearance_m = float(np.min(interior_clear))
+    min_rel_idx = int(np.argmin(interior_clear))
+    worst_idx = min_rel_idx + 1
+    min_clearance_m = float(interior_clear[min_rel_idx])
 
     f1_radius = np.sqrt(config.wavelength_m * d1[1:-1] * d2[1:-1] / max(dist_m, 1.0))
     min_fresnel_ratio = float(np.min(interior_clear / np.maximum(f1_radius, 0.01)))
 
-    return {
+    result = {
         "clear": min_clearance_m > 0.0,
         "min_clearance_m": min_clearance_m,
         "min_fresnel_ratio": min_fresnel_ratio,
@@ -87,6 +90,24 @@ def analyze_link_profile(
         "start_elev_m": float(ground[0]),
         "end_elev_m": float(ground[-1]),
     }
+
+    if include_profile:
+        f1_full = np.sqrt(config.wavelength_m * d1 * d2 / max(dist_m, 1.0))
+        eff_terrain = ground + earth_bulge
+        result["profile"] = {
+            "dist_km": (d1 / 1000.0).tolist(),
+            "terrain_m": eff_terrain.tolist(),
+            "sightline_m": sightline.tolist(),
+            "f1_radius_m": f1_full.tolist(),
+            "clearance_m": clearance.tolist(),
+            "worst_idx": worst_idx,
+            "worst_xy": (float(xs[worst_idx]), float(ys[worst_idx])),
+            "worst_dist_km": float(d1[worst_idx] / 1000.0),
+            "worst_terrain_m": float(eff_terrain[worst_idx]),
+            "worst_sightline_m": float(sightline[worst_idx]),
+        }
+
+    return result
 
 
 def evaluate_segments_vectorized(
@@ -371,8 +392,12 @@ def analyze_link(
             c_loc = config.locations[c_key]
             c_xy = c_loc["xy"]
             hc = c_loc["height_m"]
-            leg1 = analyze_link_profile(dem, config, (ux, uy), hu, c_xy, hc, multi_link_mode=False)
-            leg2 = analyze_link_profile(dem, config, c_xy, hc, (vx, vy), hv, multi_link_mode=False)
+            leg1 = analyze_link_profile(
+                dem, config, (ux, uy), hu, c_xy, hc, multi_link_mode=False, include_profile=True
+            )
+            leg2 = analyze_link_profile(
+                dem, config, c_xy, hc, (vx, vy), hv, multi_link_mode=False, include_profile=True
+            )
             viable = bool(leg1["clear"] and leg2["clear"])
             tot_d = leg1["dist_m"] + leg2["dist_m"]
             min_f1 = float(min(leg1["min_fresnel_ratio"], leg2["min_fresnel_ratio"]))

@@ -8,7 +8,7 @@ import tempfile
 from typing import Dict, List, Optional
 import numpy as np
 
-from .cartography import render_topographic_map
+from .cartography import render_candidate_profiles, render_topographic_map
 from .config import LoRaGISConfig, parse_height_value_m
 from .dem import DEMProvider
 from .geonames import parse_link_pair, resolve_location
@@ -453,6 +453,12 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 candidate_keys=config.active_candidate_keys,
             )
 
+            profiles_filename = None
+            if config.active_candidate_keys:
+                profiles_path = os.path.join(run_output_dir, "candidate_profiles.png")
+                if render_candidate_profiles(config=config, link_results=link_results, png_output_path=profiles_path):
+                    profiles_filename = "candidate_profiles.png"
+
             export_markdown_report(
                 config=config,
                 dem=dem,
@@ -470,6 +476,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 png_filename=png_filename,
                 md_output_path=md_output_path,
                 candidate_keys=config.active_candidate_keys,
+                profiles_filename=profiles_filename,
             )
 
         return {

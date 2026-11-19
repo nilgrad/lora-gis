@@ -24,6 +24,7 @@ def export_markdown_report(
     png_filename: str,
     md_output_path: str,
     candidate_keys: Optional[List[str]] = None,
+    profiles_filename: Optional[str] = None,
 ) -> None:
     """Exports the complete Markdown RF link & repeater report to `md_output_path`."""
     from qgis.core import QgsPointXY
@@ -175,6 +176,13 @@ def export_markdown_report(
             md_lines.extend([
                 f"### Explicit Candidate Relay Evaluation ({pair_name})",
                 "",
+            ])
+            if profiles_filename:
+                md_lines.extend([
+                    f"![Candidate Terrain & Line-of-Sight Profiles]({profiles_filename})",
+                    "",
+                ])
+            md_lines.extend([
                 f"| Candidate Site | Coordinates (Lat, Lon) | Ground Elev | Mount (AGL) | Leg 1 ({u_loc['name']} → C) | Leg 2 (C → {v_loc['name']}) | 1-Hop Verdict | Total Path |",
                 "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
             ])

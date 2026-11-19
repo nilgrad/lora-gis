@@ -187,6 +187,8 @@ def render_topographic_map(
 
     explicit_viable_layer = None
     explicit_blocked_layer = None
+    cand_sightline_layer = None
+    cand_blockage_layer = None
     if candidate_keys:
         explicit_viable_layer = QgsVectorLayer(
             f"Point?crs={epsg_str}&field=LabelText:string",
@@ -198,14 +200,44 @@ def render_topographic_map(
             f"Blocked Candidate Relays ({timestamp_str})",
             "memory",
         )
+        cand_sightline_layer = QgsVectorLayer(
+            f"LineString?crs={epsg_str}",
+            f"Candidate Sightlines ({timestamp_str})",
+            "memory",
+        )
+        cand_blockage_layer = QgsVectorLayer(
+            f"Point?crs={epsg_str}&field=LabelText:string",
+            f"Candidate Terrain Blockages ({timestamp_str})",
+            "memory",
+        )
         ev_prov = explicit_viable_layer.dataProvider()
         eb_prov = explicit_blocked_layer.dataProvider()
+        cs_prov = cand_sightline_layer.dataProvider()
+        cb_prov = cand_blockage_layer.dataProvider()
 
         cand_eval_by_key: Dict[str, List[Dict]] = {k: [] for k in candidate_keys}
         for res in link_results:
+            u_xy = res["u_loc"]["xy"]
+            v_xy = res["v_loc"]["xy"]
             for ec in res.get("explicit_candidates", []):
                 if ec["key"] in cand_eval_by_key:
                     cand_eval_by_key[ec["key"]].append(ec)
+                c_xy = ec["xy"]
+                for start_xy, end_xy, leg_d in [
+                    (u_xy, c_xy, ec["leg1"]),
+                    (c_xy, v_xy, ec["leg2"]),
+                ]:
+                    f_sl = QgsFeature()
+                    f_sl.setGeometry(
+                        QgsGeometry.fromPolylineXY([QgsPointXY(*start_xy), QgsPointXY(*end_xy)])
+                    )
+                    cs_prov.addFeature(f_sl)
+                    if not leg_d["clear"] and "profile" in leg_d:
+                        w_xy = leg_d["profile"]["worst_xy"]
+                        f_blk_pt = QgsFeature()
+                        f_blk_pt.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*w_xy)))
+                        f_blk_pt.setAttributes([f"✕ {leg_d['min_clearance_m']:.0f}m"])
+                        cb_prov.addFeature(f_blk_pt)
 
         for c_key in candidate_keys:
             c_loc = config.locations[c_key]
@@ -239,6 +271,8 @@ def render_topographic_map(
 
         explicit_viable_layer.updateExtents()
         explicit_blocked_layer.updateExtents()
+        cand_sightline_layer.updateExtents()
+        cand_blockage_layer.updateExtents()
 
     full_extent = node_layer.extent()
     if cand_layer.featureCount() > 0:
@@ -371,7 +405,41 @@ def render_topographic_map(
     town_layer.setLabelsEnabled(True)
 
     extra_cand_layers = []
+    extra_cand_line_layers = []
     if explicit_viable_layer is not None and explicit_blocked_layer is not None:
+        cs_symbol = QgsLineSymbol.createSimple({
+            "color": "145,55,180,145",
+            "width": "0.65",
+            "line_style": "dot",
+        })
+        cand_sightline_layer.setRenderer(QgsSingleSymbolRenderer(cs_symbol))
+        extra_cand_line_layers.append(cand_sightline_layer)
+
+        cb_symbol = QgsMarkerSymbol.createSimple({
+            "name": "cross2",
+            "color": "215,25,28,240",
+            "outline_color": "215,25,28,255",
+            "outline_width": "0.9",
+            "size": "3.4",
+        })
+        cand_blockage_layer.setRenderer(QgsSingleSymbolRenderer(cb_symbol))
+        cb_tf = QgsTextFormat()
+        cb_tf.setFont(QFont("DejaVu Sans", 7, _bold_weight))
+        cb_tf.setColor(QColor(185, 15, 20))
+        cb_buf = QgsTextBufferSettings()
+        cb_buf.setEnabled(True)
+        cb_buf.setSize(1.2)
+        cb_buf.setColor(QColor(255, 255, 255))
+        cb_tf.setBuffer(cb_buf)
+        cb_lbl = QgsPalLayerSettings()
+        cb_lbl.fieldName = "LabelText"
+        cb_lbl.isExpression = False
+        cb_lbl.dist = 1.4
+        cb_lbl.setFormat(cb_tf)
+        cand_blockage_layer.setLabeling(QgsVectorLayerSimpleLabeling(cb_lbl))
+        cand_blockage_layer.setLabelsEnabled(True)
+        extra_cand_layers.append(cand_blockage_layer)
+
         ev_symbol = QgsMarkerSymbol.createSimple({
             "name": "diamond",
             "color": "20,165,65,255",
@@ -411,14 +479,14 @@ def render_topographic_map(
             lyr.setLabelsEnabled(True)
             extra_cand_layers.append(lyr)
 
-    for lyr in [cand_layer, blocked_layer, onehop_layer, line_layer, peak_layer, town_layer, *extra_cand_layers, node_layer]:
+    for lyr in [cand_layer, blocked_layer, *extra_cand_line_layers, onehop_layer, line_layer, peak_layer, town_layer, *extra_cand_layers, node_layer]:
         QgsProject.instance().addMapLayer(lyr)
 
     map_settings = QgsMapSettings()
     map_settings.setDestinationCrs(crs_utm)
     map_settings.setTransformContext(QgsProject.instance().transformContext())
 
-    render_layers = [node_layer, *extra_cand_layers, peak_layer, town_layer, line_layer, onehop_layer, blocked_layer, cand_layer]
+    render_layers = [node_layer, *extra_cand_layers, peak_layer, town_layer, line_layer, onehop_layer, *extra_cand_line_layers, blocked_layer, cand_layer]
     if topo_layer.isValid():
         render_layers.append(topo_layer)
 
@@ -436,3 +504,186 @@ def render_topographic_map(
     print(f"Topographic Map PNG with coordinate labels exported to: {png_output_path}", flush=True)
 
     return peaks_list, towns_list, peak_elevs
+
+
+def render_candidate_profiles(
+    config: LoRaGISConfig,
+    link_results: List[Dict],
+    png_output_path: str,
+) -> Optional[str]:
+    """
+    Renders cross-sectional terrain elevation profiles for every explicit candidate relay leg,
+    highlighting the direct line-of-sight, 1st Fresnel zone (F1), and exact terrain blockage.
+    Returns `png_output_path` on success, or None if no explicit candidates or matplotlib is unavailable.
+    """
+    rows = []
+    for res in link_results:
+        u_loc, v_loc = res["u_loc"], res["v_loc"]
+        for ec in res.get("explicit_candidates", []):
+            if "profile" in ec["leg1"] and "profile" in ec["leg2"]:
+                rows.append((u_loc, v_loc, ec))
+
+    if not rows:
+        return None
+
+    try:
+        import os
+        import tempfile
+        os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "lora_gis_mpl"))
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except Exception as exc:
+        print(f"Warning: Skipping candidate profile chart (matplotlib unavailable: {exc}).", flush=True)
+        return None
+
+    n_rows = len(rows)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(15.5, 3.6 * n_rows), squeeze=False)
+    fig.patch.set_facecolor("#ffffff")
+
+    freq_label = f"{config.freq_mhz:.0f}" if config.freq_mhz.is_integer() else f"{config.freq_mhz:.1f}"
+    fig.suptitle(
+        f"{config.title} ({freq_label} MHz) Explicit Candidate Terrain & Line-of-Sight Profiles (K = 4/3 Earth Curvature)",
+        fontsize=13,
+        fontweight="bold",
+        y=0.995,
+    )
+
+    for row_idx, (u_loc, v_loc, ec) in enumerate(rows):
+        legs = [
+            (
+                f"Leg 1: {u_loc['name']} ({u_loc['height_m']*3.28084:.0f} ft) → {ec['name']} ({ec['height_m']*3.28084:.0f} ft)",
+                ec["leg1"],
+                u_loc["name"],
+                ec["name"],
+            ),
+            (
+                f"Leg 2: {ec['name']} ({ec['height_m']*3.28084:.0f} ft) → {v_loc['name']} ({v_loc['height_m']*3.28084:.0f} ft)",
+                ec["leg2"],
+                ec["name"],
+                v_loc["name"],
+            ),
+        ]
+        for col_idx, (leg_title, leg_d, left_lbl, right_lbl) in enumerate(legs):
+            ax = axes[row_idx][col_idx]
+            prof = leg_d["profile"]
+            dist_km = np.array(prof["dist_km"], dtype=np.float64)
+            terrain_m = np.array(prof["terrain_m"], dtype=np.float64)
+            sight_m = np.array(prof["sightline_m"], dtype=np.float64)
+            f1_m = np.array(prof["f1_radius_m"], dtype=np.float64)
+
+            raw_min = float(min(terrain_m.min(), (sight_m - f1_m).min()))
+            raw_max = float(max(terrain_m.max(), (sight_m + f1_m).max()))
+            span = max(40.0, raw_max - raw_min)
+            y_min = raw_min - max(20.0, 0.10 * span)
+            y_max = raw_max + max(50.0, 0.28 * span)
+
+            # Terrain fill and ridge outline
+            ax.fill_between(dist_km, y_min, terrain_m, color="#b5a68e", alpha=0.55, label="Terrain (+ 4/3 Earth Bulge)")
+            ax.plot(dist_km, terrain_m, color="#5c4b37", linewidth=1.3)
+
+            # 1st Fresnel Zone envelope
+            f1_color = "#2ca02c" if leg_d["clear"] else "#ff9933"
+            ax.fill_between(
+                dist_km,
+                sight_m - f1_m,
+                sight_m + f1_m,
+                color=f1_color,
+                alpha=0.18,
+                label="1st Fresnel Zone (F1)",
+            )
+
+            # Direct LOS line
+            los_color = "#1b8a2f" if leg_d["clear"] else "#cc2222"
+            los_style = "-" if leg_d["clear"] else "--"
+            ax.plot(dist_km, sight_m, color=los_color, linestyle=los_style, linewidth=1.6, label="Direct LOS")
+
+            # Highlight terrain protruding above the LOS sightline in red
+            blocked_mask = terrain_m > sight_m
+            if np.any(blocked_mask):
+                ax.fill_between(
+                    dist_km,
+                    sight_m,
+                    terrain_m,
+                    where=blocked_mask,
+                    interpolate=True,
+                    color="#d62728",
+                    alpha=0.55,
+                    label="Terrain Blockage",
+                )
+
+            # Mark antenna tips at endpoints
+            ax.scatter([dist_km[0], dist_km[-1]], [sight_m[0], sight_m[-1]], color="#1f4e79", s=32, zorder=5)
+
+            # Annotate worst clearance / blockage point
+            wx = prof["worst_dist_km"]
+            wt = prof["worst_terrain_m"]
+            ws = prof["worst_sightline_m"]
+            min_clr = leg_d["min_clearance_m"]
+            min_clr_ft = min_clr * 3.28084
+            if not leg_d["clear"]:
+                ax.plot([wx, wx], [ws, wt], color="#990000", linewidth=2.0, zorder=6)
+                ax.scatter([wx], [wt], color="#d62728", edgecolor="#ffffff", s=50, zorder=7)
+                ann_txt = f"Worst blockage:\n{min_clr:.1f} m ({min_clr_ft:.0f} ft) @ {wx:.2f} km"
+                x_offset = 10 if wx < 0.62 * dist_km[-1] else -115
+                ax.annotate(
+                    ann_txt,
+                    xy=(wx, wt),
+                    xytext=(x_offset, 12),
+                    textcoords="offset points",
+                    fontsize=8,
+                    fontweight="bold",
+                    color="#8c0d0d",
+                    bbox=dict(boxstyle="round,pad=0.25", fc="#fff3f3", ec="#d62728", lw=0.8),
+                    arrowprops=dict(arrowstyle="->", color="#990000", lw=1.0),
+                    zorder=8,
+                )
+            else:
+                ax.scatter([wx], [wt], color="#1b8a2f", edgecolor="#ffffff", s=45, zorder=7)
+                ann_txt = f"Min clearance:\n+{min_clr:.1f} m (+{min_clr_ft:.0f} ft, {leg_d['min_fresnel_ratio']*100:.0f}% F1)"
+                x_offset = 10 if wx < 0.62 * dist_km[-1] else -130
+                ax.annotate(
+                    ann_txt,
+                    xy=(wx, wt),
+                    xytext=(x_offset, 12),
+                    textcoords="offset points",
+                    fontsize=8,
+                    fontweight="bold",
+                    color="#136620",
+                    bbox=dict(boxstyle="round,pad=0.25", fc="#f2fbf4", ec="#1b8a2f", lw=0.8),
+                    arrowprops=dict(arrowstyle="->", color="#1b8a2f", lw=1.0),
+                    zorder=8,
+                )
+
+            status_badge = (
+                f"CLEAR ({leg_d['min_fresnel_ratio']*100:.0f}% F1)"
+                if leg_d["clear"]
+                else f"BLOCKED ({min_clr:.1f} m / {min_clr_ft:.0f} ft)"
+            )
+            ax.set_title(
+                f"{leg_title}\n{dist_km[-1]:.2f} km | {status_badge}",
+                fontsize=9.5,
+                fontweight="bold",
+                color="#136620" if leg_d["clear"] else "#8c0d0d",
+            )
+            ax.set_xlabel(f"Distance from {left_lbl} to {right_lbl} (km)", fontsize=8.5)
+            ax.set_ylabel("Elevation ASL (m)", fontsize=8.5)
+            ax.set_xlim(0.0, float(dist_km[-1]))
+            ax.set_ylim(y_min, y_max)
+            ax.grid(True, linestyle=":", alpha=0.55)
+
+            # Secondary Y-axis in feet
+            ax_ft = ax.twinx()
+            ax_ft.set_ylim(y_min * 3.28084, y_max * 3.28084)
+            ax_ft.set_ylabel("Elevation ASL (ft)", fontsize=8, color="#555555")
+            ax_ft.tick_params(axis="y", labelsize=8, colors="#555555")
+
+            if row_idx == 0 and col_idx == 0:
+                ax.legend(loc="lower right", fontsize=7.5, framealpha=0.9)
+
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+    fig.savefig(png_output_path, dpi=150)
+    plt.close(fig)
+    print(f"Candidate Terrain Blockage Profiles exported to:     {png_output_path}", flush=True)
+    return png_output_path
