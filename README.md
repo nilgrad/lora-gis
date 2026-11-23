@@ -1,5 +1,7 @@
 # lora-gis
 
+[![Unit Tests](https://github.com/nilgrad/lora-gis/actions/workflows/tests.yml/badge.svg)](https://github.com/nilgrad/lora-gis/actions/workflows/tests.yml)
+
 ![LoRa-GIS](assets/title.svg)
 
 A **PyQGIS** Line-of-Sight (LOS) and **LoRa / MeshCore RF repeater pathfinder** and automated topographic map renderer. Designed to route off-grid radio links across mountainous terrain using high-resolution Digital Elevation Models (DEMs).
