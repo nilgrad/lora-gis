@@ -24,6 +24,23 @@ def calc_fspl_db(dist_m: float, freq_mhz: float) -> float:
     return float(20.0 * np.log10(dist_km) + 20.0 * np.log10(freq_mhz) + 32.44)
 
 
+def _compute_profile_sample_count(
+    dist_m: float,
+    config: LoRaGISConfig,
+    multi_link_mode: bool = False,
+    max_samples: int = 4000,
+) -> int:
+    """Computes ray sample count, scaling with resolution in DSM/urban mode."""
+    num_samples = config.los_num_samples
+    if config.is_dsm_mode or config.sample_step_m is not None:
+        step_m = config.effective_sample_step_m
+        desired = int(np.ceil(dist_m / step_m)) + 1
+        return int(min(max_samples, max(num_samples, desired)))
+    if multi_link_mode:
+        return num_samples
+    return int(min(max_samples, max(num_samples, int(round(dist_m / 25.0)))))
+
+
 def analyze_link_profile(
     dem: DEMProvider,
     config: LoRaGISConfig,
@@ -42,18 +59,19 @@ def analyze_link_profile(
       - Free-Space Path Loss (FSPL in dB)
     """
     dist_m = float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
-    num_samples = config.los_num_samples
-    samples = num_samples if multi_link_mode else max(num_samples, int(round(dist_m / 25.0)))
+    samples = _compute_profile_sample_count(dist_m, config, multi_link_mode=multi_link_mode)
     t = np.linspace(0.0, 1.0, samples)
     xs = p1[0] + (p2[0] - p1[0]) * t
     ys = p1[1] + (p2[1] - p1[1]) * t
 
     if dem.cache is not None:
-        ground = dem.sample_bilinear(xs, ys)
+        ground = dem.sample_ground(xs, ys)
+        surface = dem.sample_surface(xs, ys) if (dem.has_separate_surface or config.is_dsm_mode) else ground
     else:
         ground = np.array(dem.fetch_elevations(list(zip(xs, ys))), dtype=np.float64)
+        surface = ground
 
-    if np.any(ground <= 0.0):
+    if np.any(~np.isfinite(surface)) or np.any(surface <= -500.0):
         return {
             "clear": False,
             "min_clearance_m": -9999.0,
@@ -64,21 +82,33 @@ def analyze_link_profile(
             "end_elev_m": 0.0,
         }
 
-    z1 = ground[0] + h1
-    z2 = ground[-1] + h2
+    z1 = surface[0] + h1
+    z2 = surface[-1] + h2
     sightline = z1 + (z2 - z1) * t
 
     d1 = dist_m * t
     d2 = dist_m * (1.0 - t)
     earth_bulge = (d1 * d2) / (2.0 * config.earth_radius_eff_m)
 
-    clearance = sightline - (ground + earth_bulge)
-    interior_clear = clearance[1:-1]
+    clearance = sightline - (surface + earth_bulge)
+
+    margin_m = config.effective_rooftop_margin_m
+    if margin_m > 0.0 and dist_m > 2.0 * margin_m:
+        interior_mask = (d1 >= margin_m) & (d2 >= margin_m)
+        interior_mask[0] = False
+        interior_mask[-1] = False
+        interior_indices = np.where(interior_mask)[0]
+        if interior_indices.size == 0:
+            interior_indices = np.arange(1, samples - 1)
+    else:
+        interior_indices = np.arange(1, samples - 1)
+
+    interior_clear = clearance[interior_indices]
     min_rel_idx = int(np.argmin(interior_clear))
-    worst_idx = min_rel_idx + 1
+    worst_idx = int(interior_indices[min_rel_idx])
     min_clearance_m = float(interior_clear[min_rel_idx])
 
-    f1_radius = np.sqrt(config.wavelength_m * d1[1:-1] * d2[1:-1] / max(dist_m, 1.0))
+    f1_radius = np.sqrt(config.wavelength_m * d1[interior_indices] * d2[interior_indices] / max(dist_m, 1.0))
     min_fresnel_ratio = float(np.min(interior_clear / np.maximum(f1_radius, 0.01)))
 
     result = {
@@ -87,14 +117,16 @@ def analyze_link_profile(
         "min_fresnel_ratio": min_fresnel_ratio,
         "dist_m": dist_m,
         "fspl_db": calc_fspl_db(dist_m, config.freq_mhz),
-        "start_elev_m": float(ground[0]),
-        "end_elev_m": float(ground[-1]),
+        "start_elev_m": float(ground[0]) if np.isfinite(ground[0]) else float(surface[0]),
+        "end_elev_m": float(ground[-1]) if np.isfinite(ground[-1]) else float(surface[-1]),
+        "start_surface_m": float(surface[0]),
+        "end_surface_m": float(surface[-1]),
     }
 
     if include_profile:
         f1_full = np.sqrt(config.wavelength_m * d1 * d2 / max(dist_m, 1.0))
-        eff_terrain = ground + earth_bulge
-        result["profile"] = {
+        eff_terrain = surface + earth_bulge
+        profile_data = {
             "dist_km": (d1 / 1000.0).tolist(),
             "terrain_m": eff_terrain.tolist(),
             "sightline_m": sightline.tolist(),
@@ -106,6 +138,9 @@ def analyze_link_profile(
             "worst_terrain_m": float(eff_terrain[worst_idx]),
             "worst_sightline_m": float(sightline[worst_idx]),
         }
+        if dem.has_separate_surface:
+            profile_data["ground_m"] = (ground + earth_bulge).tolist()
+        result["profile"] = profile_data
 
     return result
 
@@ -119,7 +154,7 @@ def evaluate_segments_vectorized(
     h2: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Vectorized batch evaluation of N sightline segments against the cached DEM grid.
+    Vectorized batch evaluation of N sightline segments against the cached DEM/DSM grid.
     Returns (los_ok_bool_array, min_clearance_m_array, min_fresnel_ratio_array).
     """
     n_segs = len(p1_arr)
@@ -135,26 +170,44 @@ def evaluate_segments_vectorized(
             fr_list.append(res["min_fresnel_ratio"])
         return np.array(ok_list, dtype=bool), np.array(clr_list), np.array(fr_list)
 
-    t = np.linspace(0.0, 1.0, config.los_num_samples)[None, :]
+    dists = np.hypot(p2_arr[:, 0] - p1_arr[:, 0], p2_arr[:, 1] - p1_arr[:, 1])[:, None]
+    max_dist_m = float(np.max(dists)) if n_segs > 0 else 0.0
+    if config.is_dsm_mode or config.sample_step_m is not None:
+        step_m = config.effective_sample_step_m
+        n_samples = int(min(2000, max(config.los_num_samples, int(np.ceil(max_dist_m / step_m)) + 1)))
+    else:
+        n_samples = config.los_num_samples
+
+    t = np.linspace(0.0, 1.0, n_samples)[None, :]
     xs = p1_arr[:, 0:1] + (p2_arr[:, 0:1] - p1_arr[:, 0:1]) * t
     ys = p1_arr[:, 1:2] + (p2_arr[:, 1:2] - p1_arr[:, 1:2]) * t
-    ground = dem.sample_bilinear(xs, ys)
-    valid_dem = np.all(ground > 0.0, axis=1)
+    surface = dem.sample_surface(xs, ys) if (dem.has_separate_surface or config.is_dsm_mode) else dem.sample_ground(xs, ys)
+    valid_dem = np.all(np.isfinite(surface) & (surface > -500.0), axis=1)
 
-    z1 = ground[:, 0:1] + h1
-    z2 = ground[:, -1:] + h2
+    z1 = surface[:, 0:1] + h1
+    z2 = surface[:, -1:] + h2
     sightline = z1 + (z2 - z1) * t
 
-    dists = np.hypot(p2_arr[:, 0] - p1_arr[:, 0], p2_arr[:, 1] - p1_arr[:, 1])[:, None]
     d1 = dists * t
     d2 = dists * (1.0 - t)
     bulge = (d1 * d2) / (2.0 * config.earth_radius_eff_m)
 
-    clearance = sightline - (ground + bulge)
-    min_clear = np.min(clearance[:, 1:-1], axis=1)
-
+    clearance = sightline - (surface + bulge)
+    interior_clear = clearance[:, 1:-1]
     f1_rad = np.sqrt(config.wavelength_m * d1[:, 1:-1] * d2[:, 1:-1] / np.maximum(dists, 1.0))
-    fresnel_ratio = np.min(clearance[:, 1:-1] / np.maximum(f1_rad, 0.01), axis=1)
+    f1_ratios = interior_clear / np.maximum(f1_rad, 0.01)
+
+    margin_m = config.effective_rooftop_margin_m
+    if margin_m > 0.0:
+        in_margin = (d1[:, 1:-1] < margin_m) | (d2[:, 1:-1] < margin_m)
+        # Only apply margin mask on segments that have at least one sample outside the margin
+        has_outside = np.any(~in_margin, axis=1)[:, None]
+        apply_mask = in_margin & has_outside
+        interior_clear = np.where(apply_mask, np.inf, interior_clear)
+        f1_ratios = np.where(apply_mask, np.inf, f1_ratios)
+
+    min_clear = np.where(valid_dem, np.min(interior_clear, axis=1), -9999.0)
+    fresnel_ratio = np.where(valid_dem, np.min(f1_ratios, axis=1), -99.0)
 
     los_ok = valid_dem & (min_clear > 0.0)
     return los_ok, min_clear, fresnel_ratio

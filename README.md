@@ -137,27 +137,78 @@ python3 -m lora_gis --state NY \
 
 Explicit candidates can also be configured in JSON via `"candidate_relays"` and `"candidate_height"`. The DEM bounding box and map extent automatically expand to cover all candidates, and the report includes leg-by-leg clearance tables, hub height sensitivity, 2-hop candidate pairs, and hybrid (candidate + grid) 2-hop solutions.
 
+### 5. Local DSM & Urban Surface Analysis (`--surface-mode dsm`)
+
+To model buildings and tree canopy using a local georeferenced Digital Surface Model (DSM) GeoTIFF or a regional DSM ImageServer, enable `--surface-mode dsm` (or pass `--dsm-file` alongside a bare-earth DEM) and switch to an urban basemap:
+
+```bash
+# Single local DSM GeoTIFF stored in feet over OpenStreetMap
+python3 -m lora_gis \
+  --route west=38.840,-97.625 east=38.840,-97.595 \
+  --dem-file salina_dsm_ft.tif \
+  --dem-units ft \
+  --surface-mode dsm \
+  --basemap osm
+
+# Bare-earth DEM + separate local DSM GeoTIFF with satellite imagery
+python3 -m lora_gis \
+  --route west=38.840,-97.625 east=38.840,-97.595 \
+  --dem-file ground_dem.tif \
+  --dsm-file buildings_dsm.tif \
+  --rooftop-margin 12m \
+  --basemap satellite
+```
+
 ### CLI Options Reference
+
+#### Topology & Locations
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
-| `--route`, `-r` | Ordered sequence of 2+ locations forming a route | — |
-| `--links`, `-l` | Explicit `LOC1:LOC2` point-to-point link pairs | — |
+| `--config`, `-c` | Path to a JSON configuration file | None |
+| `--route`, `-r` | Ordered sequence of 2+ locations forming a route | None |
+| `--links`, `-l` | Explicit `LOC1:LOC2` point-to-point link pairs | None |
 | `--candidates`, `--candidate-relays` | Explicit candidate relay locations (`slug` or `name=lat,lon`) evaluated alongside the grid search | None |
-| `--candidate-height` | Mount height override for explicit candidate relays (`ft` or `m`) | Predefined location height or `--relay-height` |
-| `--height`, `-H` | Override antenna height per location (`LOC=30ft` or `LOC=10m`) | — |
-| `--hops` | Maximum intermediate relays per link (`1` or `2`) | `2` (single link), `1` (multi-link) |
-| `--freq-mhz` | LoRa operating frequency in MHz (`915.0`, `868.0`, `433.0`) | `915.0` |
-| `--relay-height` | Intermediate candidate relay height (`ft` or `m`) | `60ft` (`18.3 m`) |
+| `--state` | Default 2-letter US state code for USGS GeoNames lookups | None |
+
+#### Antenna & Relay Heights
+
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `--height`, `-H` | Override antenna height per location (`LOC=30ft` or `LOC=10m`) | None |
 | `--observer-height` | Default endpoint antenna height (`ft` or `m`) | `33ft` (`10.0 m`) |
 | `--repeater-height` | Default hub repeater height in multi-leg routes (`ft` or `m`) | `30ft` (`9.14 m`) |
+| `--relay-height` | Intermediate candidate relay height (`ft` or `m`) | `60ft` (`18.3 m`) |
+| `--candidate-height` | Mount height override for explicit candidate relays (`ft` or `m`) | Predefined location height or `--relay-height` |
+
+#### RF & Grid Search
+
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `--hops` | Maximum intermediate relays per link (`1` or `2`) | `2` (single link), `1` (multi-link) |
+| `--freq-mhz`, `--freq` | LoRa operating frequency in MHz (`915.0`, `868.0`, `433.0`) | `915.0` |
 | `--min-fresnel` | Target 1st Fresnel Zone ($F_1$) clearance ratio | `0.60` (`60%`) |
 | `--grid-step` | Starting coarse search grid step in meters | `500.0` |
 | `--min-grid-step` | Finest search grid step in meters | `150.0` |
+
+#### Elevation, Surface & DSM
+
+| Flag | Description | Default |
+| :--- | :--- | :--- |
 | `--dem` | DEM preset (`usgs-3dep`, `ny-gis`) or ArcGIS ImageServer URL | `usgs-3dep` |
-| `--dem-file` | Local GeoTIFF DEM file path | — |
+| `--dem-file` | Local georeferenced GeoTIFF DEM/DSM file path | None |
+| `--dsm-file` | Optional separate local georeferenced DSM GeoTIFF (buildings/trees) overlaid for path obstructions | None |
+| `--dem-units` | Vertical elevation units of the DEM/DSM source (`m`, `ft`, `us-ft`) | `m` |
+| `--surface-mode` | Surface sampling mode: `dem` (bare-earth bilinear) or `dsm` (nearest-neighbor + dense urban sampling) | `dem` |
+| `--sample-step` | Sightline ray sample spacing in meters | `5.0` (DSM) / `25.0` (DEM) |
+| `--rooftop-margin` | Near-field exclusion radius around endpoints in DSM mode (`m` or `ft`) | `12m` (DSM) / `0m` (DEM) |
 | `--crs` | Explicit metric EPSG code (auto-detected UTM zone if omitted) | Auto UTM |
-| `--state` | Default 2-letter US state code for USGS GeoNames lookups | — |
+
+#### Map & Output
+
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `--basemap` | Map backdrop preset (`topo`, `osm`, `satellite`) or custom QGIS XYZ/WMS URI | `topo` |
 | `--output-dir`, `-o` | Output directory for `YYYY-MM-DD_HH-MM-SS/map.png` & `report.md` | `results` |
 | `--title` | Report title prefix | `LoRa-GIS` |
 

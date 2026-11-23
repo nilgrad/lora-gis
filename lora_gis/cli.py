@@ -19,122 +19,166 @@ from .utm import detect_utm_crs, parse_crs_wkid
 
 def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=f"{prog_title} — PyQGIS LoRa / MeshCore RF Line-of-Sight & Repeater Pathfinder",
+        description=f"{prog_title}: PyQGIS LoRa / MeshCore RF Line-of-Sight & Repeater Pathfinder",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
             '  lora-gis --route "Beacon, NY" "New Paltz, NY"\n'
             '  lora-gis --route "Boulder, CO" "Nederland, CO" --relay-height 40ft\n'
             "  lora-gis --links site_a=41.885,-74.555:site_b=41.920,-74.660 --hops 2\n"
+            "  lora-gis --route a=38.840,-97.625 b=38.840,-97.595 --dem-file city_dsm.tif --surface-mode dsm --basemap osm\n"
             "  lora-gis --config network.json\n"
         ),
     )
-    parser.add_argument(
+
+    topo_group = parser.add_argument_group("Topology & Locations")
+    topo_group.add_argument(
         "--config", "-c",
         metavar="FILE",
         help="Path to a JSON configuration file defining locations, route/links, and RF parameters",
     )
-    parser.add_argument(
+    topo_group.add_argument(
         "--route", "-r",
         nargs="+",
         metavar="LOCATION",
         help="Ordered sequence of locations forming a multi-leg route (e.g., --route 'Beacon, NY' 'New Paltz, NY')",
     )
-    parser.add_argument(
+    topo_group.add_argument(
         "--links", "--link", "-l",
         nargs="+",
         metavar="LOC1:LOC2",
         help="Explicit point-to-point link pairs (e.g., --links node1:node2 node2:node3)",
     )
-    parser.add_argument(
+    topo_group.add_argument(
         "--candidates", "--candidate-relays",
         nargs="+",
         metavar="LOCATION",
         help="Explicit candidate relay locations to evaluate alongside the grid search (catalog slug or 'name=lat,lon')",
     )
-    parser.add_argument(
-        "--candidate-height",
+    topo_group.add_argument(
+        "--state",
         default=None,
-        help="Mount height override for explicit candidate relays, e.g. '30ft' or '9.14m'",
+        help="Default 2-letter US state code for USGS GeoNames lookups (e.g. 'NY', 'CO')",
     )
-    parser.add_argument(
+
+    height_group = parser.add_argument_group("Antenna & Relay Heights")
+    height_group.add_argument(
         "--height", "-H",
         nargs="+",
         metavar="LOC=HEIGHT",
         help="Set antenna/repeater height for specific locations (e.g., --height node1=30ft node2=10m)",
     )
-    parser.add_argument(
+    height_group.add_argument(
+        "--observer-height",
+        default=None,
+        help="Default endpoint antenna height, e.g. '33ft' or '10m' (default: 33ft / 10.0m)",
+    )
+    height_group.add_argument(
+        "--repeater-height",
+        default=None,
+        help="Default hub repeater height in multi-leg topologies, e.g. '30ft' or '9.14m'",
+    )
+    height_group.add_argument(
+        "--relay-height",
+        default=None,
+        help="Intermediate candidate relay mount height, e.g. '60ft' or '18.3m' (default: 60ft / 18.3m)",
+    )
+    height_group.add_argument(
+        "--candidate-height",
+        default=None,
+        help="Mount height override for explicit candidate relays, e.g. '30ft' or '9.14m'",
+    )
+
+    rf_group = parser.add_argument_group("RF & Grid Search")
+    rf_group.add_argument(
         "--hops",
         type=int,
         choices=[1, 2],
         default=None,
         help="Max intermediate relays per link (default: 2 for single-link mode, 1 for multi-link topologies)",
     )
-    parser.add_argument(
+    rf_group.add_argument(
         "--freq-mhz", "--freq",
         type=float,
         default=None,
         help="Operating frequency in MHz (default: 915.0 for US915, or e.g. 868.0 for EU868)",
     )
-    parser.add_argument(
-        "--relay-height",
-        default=None,
-        help="Intermediate candidate relay mount height, e.g. '60ft' or '18.3m' (default: 60ft / 18.3m)",
-    )
-    parser.add_argument(
-        "--observer-height",
-        default=None,
-        help="Default endpoint antenna height, e.g. '33ft' or '10m' (default: 33ft / 10.0m)",
-    )
-    parser.add_argument(
-        "--repeater-height",
-        default=None,
-        help="Default hub repeater height in multi-leg topologies, e.g. '30ft' or '9.14m'",
-    )
-    parser.add_argument(
+    rf_group.add_argument(
         "--min-fresnel",
         type=float,
         default=None,
         help="Target 1st Fresnel Zone clearance ratio (default: 0.60 for 60%% F1)",
     )
-    parser.add_argument(
+    rf_group.add_argument(
         "--grid-step",
         type=float,
         default=None,
         help="Initial coarse candidate grid step in meters (default: 500.0)",
     )
-    parser.add_argument(
+    rf_group.add_argument(
         "--min-grid-step",
         type=float,
         default=None,
         help="Minimum refined candidate grid step in meters (default: 150.0)",
     )
-    parser.add_argument(
+
+    elev_group = parser.add_argument_group("Elevation, Surface & DSM")
+    elev_group.add_argument(
         "--dem",
         default=None,
         help="DEM source preset ('usgs-3dep', 'ny-gis') or custom ArcGIS ImageServer URL",
     )
-    parser.add_argument(
+    elev_group.add_argument(
         "--dem-file",
         default=None,
-        help="Local GeoTIFF DEM file path for offline or custom regional elevation data",
+        help="Local georeferenced GeoTIFF DEM/DSM file path for offline or regional elevation data",
     )
-    parser.add_argument(
+    elev_group.add_argument(
+        "--dsm-file",
+        default=None,
+        help="Optional local georeferenced DSM GeoTIFF (buildings/trees) overlaid for path obstructions",
+    )
+    elev_group.add_argument(
+        "--dem-units",
+        choices=["m", "ft", "us-ft"],
+        default=None,
+        help="Vertical elevation units of the DEM/DSM source ('m', 'ft', or 'us-ft'; default: 'm')",
+    )
+    elev_group.add_argument(
+        "--surface-mode",
+        choices=["dem", "dsm"],
+        default=None,
+        help="Elevation surface sampling mode: 'dem' (bare-earth bilinear) or 'dsm' (nearest-neighbor + dense urban sampling)",
+    )
+    elev_group.add_argument(
+        "--sample-step",
+        type=float,
+        default=None,
+        help="Sightline ray sample spacing in meters (default: 5m in DSM mode, 25m in DEM mode)",
+    )
+    elev_group.add_argument(
+        "--rooftop-margin",
+        default=None,
+        help="Near-field exclusion radius around endpoints in DSM mode, e.g. '12m' or '40ft' (default: 12m in DSM mode)",
+    )
+    elev_group.add_argument(
         "--crs",
         default=None,
         help="Override metric projection EPSG code (e.g. 'EPSG:26918'); auto-detected from lat/lon by default",
     )
-    parser.add_argument(
-        "--state",
+
+    output_group = parser.add_argument_group("Map & Output")
+    output_group.add_argument(
+        "--basemap",
         default=None,
-        help="Default 2-letter US state code for USGS GeoNames lookups (e.g. 'NY', 'CO')",
+        help="Map backdrop preset ('topo', 'osm', 'satellite') or custom QGIS XYZ/WMS URI (default: 'topo')",
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--output-dir", "-o",
         default=None,
         help="Directory for timestamped map.png and report.md outputs (default: results)",
     )
-    parser.add_argument(
+    output_group.add_argument(
         "--title",
         default=None,
         help="Project title prefix used in generated Markdown reports",
@@ -191,6 +235,18 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.dem_source = args.dem
     if args.dem_file is not None:
         config.dem_file = args.dem_file
+    if args.dsm_file is not None:
+        config.dsm_file = args.dsm_file
+    if args.dem_units is not None:
+        config.dem_units = args.dem_units
+    if args.surface_mode is not None:
+        config.surface_mode = args.surface_mode
+    if args.sample_step is not None:
+        config.sample_step_m = args.sample_step
+    if args.rooftop_margin is not None:
+        config.rooftop_margin_m = parse_height_value_m(args.rooftop_margin)
+    if args.basemap is not None:
+        config.basemap = args.basemap
     if args.crs is not None:
         config.crs_epsg = args.crs
     if args.output_dir is not None:
@@ -279,8 +335,12 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                     config.locations[k]["height_m"] = config.default_repeater_height_m
 
     os.environ.setdefault("QGIS_CUSTOM_CONFIG_PATH", os.path.join(tempfile.gettempdir(), "qgis_los_config"))
-    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if sys.platform.startswith("linux"):
+        xdg_dir = os.environ.get("XDG_RUNTIME_DIR", "")
+        wl_disp = os.environ.get("WAYLAND_DISPLAY", "")
+        has_wayland = bool(wl_disp) and bool(xdg_dir) and os.path.exists(os.path.join(xdg_dir, wl_disp))
+        if not os.environ.get("DISPLAY") and not has_wayland:
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     from qgis.core import (
         QgsApplication,
@@ -386,6 +446,9 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             image_server_base=config.image_server_base,
             wkid=wkid,
             dem_file=config.dem_file,
+            unit_scale=config.dem_unit_scale,
+            sampling_mode="nearest" if config.is_dsm_mode else "bilinear",
+            dsm_file=config.dsm_file,
         )
 
         all_dem_keys = list(active_location_keys) + [
@@ -404,8 +467,8 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             min(all_ys) - dem_padding,
             max(all_xs) + dem_padding,
             max(all_ys) + dem_padding,
-            resolution_m=6.0 if multi_link_mode else 3.0,
-            max_px=2500,
+            resolution_m=1.5 if config.is_dsm_mode else (6.0 if multi_link_mode else 3.0),
+            max_px=4000 if config.is_dsm_mode else 2500,
         )
 
         link_results = []

@@ -47,12 +47,18 @@ def render_topographic_map(
     from qgis.PyQt.QtCore import QSize
     from qgis.PyQt.QtGui import QColor, QFont
 
-    topo_layer = QgsRasterLayer(config.topo_basemap_url, "USGS Topographic Basemap", "wms")
+    basemap_labels = {
+        "topo": "USGS Topographic Basemap",
+        "osm": "OpenStreetMap Street Basemap",
+        "satellite": "World Satellite Imagery",
+    }
+    basemap_title = basemap_labels.get(config.basemap.strip().lower(), "Custom Basemap")
+    topo_layer = QgsRasterLayer(config.active_basemap_url, basemap_title, "wms")
     if not topo_layer.isValid():
         topo_layer = QgsRasterLayer(config.fallback_basemap_url, "World Topographic Basemap", "wms")
     if topo_layer.isValid():
         QgsProject.instance().addMapLayer(topo_layer)
-        print("\nTopographic basemap stream connected.", flush=True)
+        print(f"\nBasemap stream connected ({basemap_title}).", flush=True)
 
     node_layer = QgsVectorLayer(
         f"Point?crs={epsg_str}&field=Role:string&field=Lat:double&field=Lon:double&field=LabelText:string",
@@ -648,9 +654,24 @@ def render_candidate_profiles(
             y_min = raw_min - max(20.0, 0.10 * span)
             y_max = raw_max + max(50.0, 0.28 * span)
 
-            # Terrain fill and ridge outline
-            ax.fill_between(dist_km, y_min, terrain_m, color="#b5a68e", alpha=0.55, label="Terrain (+ 4/3 Earth Bulge)")
-            ax.plot(dist_km, terrain_m, color="#5c4b37", linewidth=1.3)
+            # Terrain / surface fill and ridge outline
+            if "ground_m" in prof:
+                ground_m = np.array(prof["ground_m"], dtype=np.float64)
+                ax.fill_between(dist_km, y_min, ground_m, color="#b5a68e", alpha=0.55, label="Ground DEM (+ 4/3 Bulge)")
+                ax.fill_between(
+                    dist_km,
+                    ground_m,
+                    terrain_m,
+                    where=(terrain_m > ground_m),
+                    color="#6b7b8c",
+                    alpha=0.65,
+                    label="Surface / Buildings (DSM)",
+                )
+                ax.plot(dist_km, terrain_m, color="#3b4856", linewidth=1.2)
+            else:
+                surface_label = "DSM Surface (+ 4/3 Bulge)" if config.is_dsm_mode else "Terrain (+ 4/3 Earth Bulge)"
+                ax.fill_between(dist_km, y_min, terrain_m, color="#b5a68e", alpha=0.55, label=surface_label)
+                ax.plot(dist_km, terrain_m, color="#5c4b37", linewidth=1.3)
 
             # 1st Fresnel Zone envelope
             f1_color = "#2ca02c" if leg_d["clear"] else "#ff9933"
