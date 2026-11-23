@@ -124,6 +124,12 @@ class LoRaGISConfig:
     dsm_file: Optional[str] = None            # Optional separate local DSM GeoTIFF (buildings/trees)
     dem_units: str = "m"                      # Vertical elevation units ('m', 'ft', 'us-ft')
     surface_mode: str = "dem"                 # 'dem' (bare-earth bilinear) or 'dsm' (nearest + urban sampling)
+    buildings_source: str = "none"            # Building overlay source ('none' or 'osm')
+    default_building_height_m: float = 6.0    # Fallback height (m) for untagged OSM buildings
+    overpass_url: Optional[str] = None        # Optional custom Overpass API endpoint
+    auto_candidates: int = 0                  # Auto-evaluate top N tall buildings/towers as candidates
+    min_building_height_m: float = 15.0       # Minimum structure height (m) for --auto-candidates
+    rooftop_mast_height_m: float = 3.05       # Default mast height (~10 ft) on auto-selected rooftops
     sample_step_m: Optional[float] = None     # Optional override for ray sample spacing (m)
     rooftop_margin_m: Optional[float] = None  # Near-field endpoint exclusion margin in DSM mode (m)
     crs_epsg: Optional[str] = None            # Auto-detected UTM zone if None
@@ -155,7 +161,11 @@ class LoRaGISConfig:
 
     @property
     def is_dsm_mode(self) -> bool:
-        return self.surface_mode.strip().lower() == "dsm" or self.dsm_file is not None
+        return (
+            self.surface_mode.strip().lower() == "dsm"
+            or self.dsm_file is not None
+            or self.buildings_source.strip().lower() != "none"
+        )
 
     @property
     def effective_sample_step_m(self) -> float:
@@ -207,6 +217,22 @@ class LoRaGISConfig:
             self.dem_units = str(data["dem_units"])
         if "surface_mode" in data:
             self.surface_mode = str(data["surface_mode"])
+        if "buildings" in data:
+            self.buildings_source = str(data["buildings"])
+        elif "buildings_source" in data:
+            self.buildings_source = str(data["buildings_source"])
+        if "default_building_height" in data:
+            self.default_building_height_m = parse_height_value_m(data["default_building_height"])
+        elif "default_building_height_m" in data:
+            self.default_building_height_m = float(data["default_building_height_m"])
+        if "overpass_url" in data:
+            self.overpass_url = str(data["overpass_url"])
+        if "auto_candidates" in data:
+            self.auto_candidates = int(data["auto_candidates"])
+        if "min_building_height" in data:
+            self.min_building_height_m = parse_height_value_m(data["min_building_height"])
+        elif "min_building_height_m" in data:
+            self.min_building_height_m = float(data["min_building_height_m"])
         if "sample_step_m" in data:
             self.sample_step_m = float(data["sample_step_m"])
         if "rooftop_margin" in data:

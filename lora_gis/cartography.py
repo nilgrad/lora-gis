@@ -21,6 +21,7 @@ def render_topographic_map(
     timestamp_str: str,
     png_output_path: str,
     candidate_keys: Optional[List[str]] = None,
+    buildings: Optional[List] = None,
 ) -> Tuple[List, List, List[float]]:
     """
     Renders the topographic map backdrop, candidate relays, 1-hop/2-hop sightlines,
@@ -29,6 +30,7 @@ def render_topographic_map(
     """
     from qgis.core import (
         QgsFeature,
+        QgsFillSymbol,
         QgsGeometry,
         QgsLineSymbol,
         QgsMapRendererSequentialJob,
@@ -541,6 +543,39 @@ def render_topographic_map(
             lyr.setLabelsEnabled(True)
             extra_cand_layers.append(lyr)
 
+    building_layer = None
+    if buildings:
+        building_layer = QgsVectorLayer(
+            f"Polygon?crs={epsg_str}&field=Name:string&field=HeightM:double",
+            f"Buildings ({timestamp_str})",
+            "memory",
+        )
+        b_poly_prov = building_layer.dataProvider()
+        b_feats = []
+        for bfeat in buildings:
+            for ring in bfeat.polygons_utm:
+                if len(ring) < 3:
+                    continue
+                qpts = [QgsPointXY(px, py) for px, py in ring]
+                if qpts[0] != qpts[-1]:
+                    qpts.append(qpts[0])
+                f_b = QgsFeature()
+                f_b.setGeometry(QgsGeometry.fromPolygonXY([qpts]))
+                f_b.setAttributes([bfeat.name, float(bfeat.height_m)])
+                b_feats.append(f_b)
+        if b_feats:
+            b_poly_prov.addFeatures(b_feats)
+            building_layer.updateExtents()
+            b_symbol = QgsFillSymbol.createSimple({
+                "color": "75,95,120,120",
+                "outline_color": "45,60,80,180",
+                "outline_width": "0.25",
+            })
+            building_layer.setRenderer(QgsSingleSymbolRenderer(b_symbol))
+            QgsProject.instance().addMapLayer(building_layer)
+        else:
+            building_layer = None
+
     for lyr in [cand_layer, blocked_layer, *extra_cand_line_layers, onehop_layer, line_layer, peak_layer, town_layer, *extra_cand_layers, node_layer]:
         QgsProject.instance().addMapLayer(lyr)
 
@@ -562,6 +597,8 @@ def render_topographic_map(
         pass
 
     render_layers = [node_layer, *extra_cand_layers, peak_layer, town_layer, line_layer, onehop_layer, *extra_cand_line_layers, blocked_layer, cand_layer]
+    if building_layer is not None:
+        render_layers.append(building_layer)
     if topo_layer.isValid():
         render_layers.append(topo_layer)
 

@@ -1,6 +1,7 @@
 """Command-line interface and orchestration pipeline for lora-gis."""
 
 import argparse
+import atexit
 from datetime import datetime
 import os
 import sys
@@ -8,13 +9,31 @@ import tempfile
 from typing import Dict, List, Optional
 import numpy as np
 
+from .buildings import (
+    BuildingFeature,
+    fetch_osm_buildings,
+    rasterize_buildings_onto_dem,
+    select_tall_structure_candidates,
+)
 from .cartography import render_candidate_profiles, render_topographic_map
-from .config import LoRaGISConfig, parse_height_value_m
+from .config import LoRaGISConfig, normalize_loc_key, parse_height_value_m
 from .dem import DEMProvider
 from .geonames import parse_link_pair, resolve_location
 from .report import export_markdown_report
 from .rf import analyze_link, compute_link_padding
 from .utm import detect_utm_crs, parse_crs_wkid
+
+_MANAGED_QGS_APP = None
+
+
+def _shutdown_managed_qgis() -> None:
+    global _MANAGED_QGS_APP
+    if _MANAGED_QGS_APP is not None:
+        try:
+            _MANAGED_QGS_APP.exitQgis()
+        except Exception:
+            pass
+        _MANAGED_QGS_APP = None
 
 
 def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
@@ -54,6 +73,18 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
         nargs="+",
         metavar="LOCATION",
         help="Explicit candidate relay locations to evaluate alongside the grid search (catalog slug or 'name=lat,lon')",
+    )
+    topo_group.add_argument(
+        "--auto-candidates",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Auto-select top N tallest structures from --buildings as candidate relays (default: 0)",
+    )
+    topo_group.add_argument(
+        "--min-building-height",
+        default=None,
+        help="Minimum structure height for --auto-candidates, e.g. '15m' or '50ft' (default: 15m)",
     )
     topo_group.add_argument(
         "--state",
@@ -151,6 +182,22 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
         help="Elevation surface sampling mode: 'dem' (bare-earth bilinear) or 'dsm' (nearest-neighbor + dense urban sampling)",
     )
     elev_group.add_argument(
+        "--buildings",
+        choices=["none", "osm"],
+        default=None,
+        help="Building and tall-structure overlay source ('none' or 'osm' via Overpass API; default: 'none')",
+    )
+    elev_group.add_argument(
+        "--default-building-height",
+        default=None,
+        help="Fallback height for untagged OSM buildings, e.g. '6m' or '20ft' (default: 6m)",
+    )
+    elev_group.add_argument(
+        "--overpass-url",
+        default=None,
+        help="Optional custom Overpass API interpreter URL for --buildings osm",
+    )
+    elev_group.add_argument(
         "--sample-step",
         type=float,
         default=None,
@@ -241,6 +288,16 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.dem_units = args.dem_units
     if args.surface_mode is not None:
         config.surface_mode = args.surface_mode
+    if args.buildings is not None:
+        config.buildings_source = args.buildings
+    if args.default_building_height is not None:
+        config.default_building_height_m = parse_height_value_m(args.default_building_height)
+    if args.overpass_url is not None:
+        config.overpass_url = args.overpass_url
+    if args.auto_candidates is not None:
+        config.auto_candidates = max(0, int(args.auto_candidates))
+    if args.min_building_height is not None:
+        config.min_building_height_m = parse_height_value_m(args.min_building_height)
     if args.sample_step is not None:
         config.sample_step_m = args.sample_step
     if args.rooftop_margin is not None:
@@ -351,7 +408,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
     )
     from qgis.PyQt.QtCore import QCoreApplication
 
-    qgs_app = None
+    global _MANAGED_QGS_APP
     headless_cli = False
     if QgsApplication.instance() is None:
         headless_cli = True
@@ -372,8 +429,11 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 qgis_prefix = "/usr"
         if qgis_prefix:
             QgsApplication.setPrefixPath(qgis_prefix, True)
-        qgs_app = QgsApplication([], False)
-        qgs_app.initQgis()
+        _MANAGED_QGS_APP = QgsApplication([], False)
+        _MANAGED_QGS_APP.initQgis()
+        atexit.register(_shutdown_managed_qgis)
+    elif _MANAGED_QGS_APP is not None:
+        headless_cli = True
 
     try:
         # Auto-detect UTM CRS from the centroid of active locations unless overridden
@@ -462,14 +522,83 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
         )
         dem_padding = max_link_pad + 500.0
 
+        dem_xmin = min(all_xs) - dem_padding
+        dem_ymin = min(all_ys) - dem_padding
+        dem_xmax = max(all_xs) + dem_padding
+        dem_ymax = max(all_ys) + dem_padding
+
         dem.load_raster(
-            min(all_xs) - dem_padding,
-            min(all_ys) - dem_padding,
-            max(all_xs) + dem_padding,
-            max(all_ys) + dem_padding,
+            dem_xmin,
+            dem_ymin,
+            dem_xmax,
+            dem_ymax,
             resolution_m=1.5 if config.is_dsm_mode else (6.0 if multi_link_mode else 3.0),
             max_px=4000 if config.is_dsm_mode else 2500,
         )
+
+        buildings_list: List[BuildingFeature] = []
+        if config.buildings_source.strip().lower() == "osm":
+            sw_ll = inv_transform.transform(QgsPointXY(dem_xmin, dem_ymin))
+            ne_ll = inv_transform.transform(QgsPointXY(dem_xmax, dem_ymax))
+            bbox_wgs84 = (
+                min(sw_ll.y(), ne_ll.y()),
+                min(sw_ll.x(), ne_ll.x()),
+                max(sw_ll.y(), ne_ll.y()),
+                max(sw_ll.x(), ne_ll.x()),
+            )
+
+            def _proj_wgs84_to_utm(lon_val: float, lat_val: float):
+                pt = transform.transform(QgsPointXY(lon_val, lat_val))
+                return (float(pt.x()), float(pt.y()))
+
+            buildings_list = fetch_osm_buildings(
+                bbox_wgs84=bbox_wgs84,
+                proj_fn=_proj_wgs84_to_utm,
+                overpass_url=config.overpass_url,
+                default_building_height_m=config.default_building_height_m,
+            )
+            if buildings_list and dem.cache is not None and not dem.has_separate_surface:
+                rasterize_buildings_onto_dem(dem, buildings_list, target_res_m=2.0, max_px=4000)
+
+            if buildings_list and config.auto_candidates > 0:
+                auto_selected = select_tall_structure_candidates(
+                    buildings=buildings_list,
+                    dem=dem,
+                    count=config.auto_candidates,
+                    min_height_m=config.min_building_height_m,
+                    study_bbox=(dem_xmin, dem_ymin, dem_xmax, dem_ymax),
+                )
+                mast_h = (
+                    config.candidate_height_m
+                    if config.candidate_height_m is not None
+                    else config.rooftop_mast_height_m
+                )
+                for idx_b, bfeat in enumerate(auto_selected, 1):
+                    base_key = normalize_loc_key(bfeat.name) or f"structure-{idx_b}"
+                    cand_key = base_key
+                    suffix = 2
+                    while cand_key in config.locations:
+                        cand_key = f"{base_key}-{suffix}"
+                        suffix += 1
+                    config.locations[cand_key] = {
+                        "name": bfeat.name,
+                        "lat": bfeat.lat,
+                        "lon": bfeat.lon,
+                        "x": bfeat.x,
+                        "y": bfeat.y,
+                        "xy": (bfeat.x, bfeat.y),
+                        "height_m": mast_h,
+                        "building_height_m": bfeat.height_m,
+                        "structure_type": bfeat.structure_type,
+                        "address": bfeat.address,
+                    }
+                    config.active_candidate_keys.append(cand_key)
+                if auto_selected:
+                    print(
+                        f"Auto-selected {len(auto_selected)} tall OSM structure(s) as candidate relays "
+                        f"(rooftop mast: {mast_h:.2f} m / {mast_h*3.28084:.0f} ft).",
+                        flush=True,
+                    )
 
         link_results = []
         all_viable_relays = set()
@@ -514,6 +643,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 timestamp_str=timestamp_str,
                 png_output_path=png_output_path,
                 candidate_keys=config.active_candidate_keys,
+                buildings=buildings_list,
             )
 
             profiles_filename = None
@@ -540,6 +670,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 md_output_path=md_output_path,
                 candidate_keys=config.active_candidate_keys,
                 profiles_filename=profiles_filename,
+                buildings=buildings_list,
             )
 
         return {
@@ -547,10 +678,11 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             "png_output_path": png_output_path,
             "md_output_path": md_output_path,
             "link_results": link_results,
+            "buildings_count": len(buildings_list),
         }
     finally:
-        if qgs_app is not None:
-            qgs_app.exitQgis()
+        if headless_cli:
+            QgsProject.instance().clear()
 
 
 def main(default_config: Optional[LoRaGISConfig] = None, argv: Optional[List[str]] = None) -> Dict:
