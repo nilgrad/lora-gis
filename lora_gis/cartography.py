@@ -188,6 +188,7 @@ def render_topographic_map(
     explicit_viable_layer = None
     explicit_blocked_layer = None
     cand_sightline_layer = None
+    cand_clear_sightline_layer = None
     cand_blockage_layer = None
     if candidate_keys:
         explicit_viable_layer = QgsVectorLayer(
@@ -202,7 +203,12 @@ def render_topographic_map(
         )
         cand_sightline_layer = QgsVectorLayer(
             f"LineString?crs={epsg_str}",
-            f"Candidate Sightlines ({timestamp_str})",
+            f"Blocked Candidate Sightlines ({timestamp_str})",
+            "memory",
+        )
+        cand_clear_sightline_layer = QgsVectorLayer(
+            f"LineString?crs={epsg_str}",
+            f"Clear Candidate Sightlines ({timestamp_str})",
             "memory",
         )
         cand_blockage_layer = QgsVectorLayer(
@@ -213,16 +219,36 @@ def render_topographic_map(
         ev_prov = explicit_viable_layer.dataProvider()
         eb_prov = explicit_blocked_layer.dataProvider()
         cs_prov = cand_sightline_layer.dataProvider()
+        ccs_prov = cand_clear_sightline_layer.dataProvider()
         cb_prov = cand_blockage_layer.dataProvider()
 
         cand_eval_by_key: Dict[str, List[Dict]] = {k: [] for k in candidate_keys}
+        cand_clear_legs: Dict[str, List[Tuple[str, float]]] = {k: [] for k in candidate_keys}
+        cand_2hop_f1: Dict[str, List[float]] = {k: [] for k in candidate_keys}
+        cand_hybrid_f1: Dict[str, List[float]] = {k: [] for k in candidate_keys}
         seen_cand_segments = set()
         for res in link_results:
             u_xy = res["u_loc"]["xy"]
             v_xy = res["v_loc"]["xy"]
+            u_name = res["u_loc"]["name"]
+            v_name = res["v_loc"]["name"]
+            for p in res.get("explicit_2hop_pairs", []):
+                if p.get("viable"):
+                    for ck in (p["c1_key"], p["c2_key"]):
+                        if ck in cand_2hop_f1:
+                            cand_2hop_f1[ck].append(p["min_fresnel"])
+            for h in res.get("hybrid_2hop", []):
+                for ck in candidate_keys:
+                    c_nm = config.locations[ck]["name"]
+                    if h.get("r1_name") == c_nm or h.get("r2_name") == c_nm:
+                        cand_hybrid_f1[ck].append(h["min_fresnel"])
             for ec in res.get("explicit_candidates", []):
                 if ec["key"] in cand_eval_by_key:
                     cand_eval_by_key[ec["key"]].append(ec)
+                    if ec["leg1"]["clear"]:
+                        cand_clear_legs[ec["key"]].append((u_name, ec["leg1"]["min_fresnel_ratio"]))
+                    if ec["leg2"]["clear"]:
+                        cand_clear_legs[ec["key"]].append((v_name, ec["leg2"]["min_fresnel_ratio"]))
                 c_xy = ec["xy"]
                 for start_xy, end_xy, leg_d in [
                     (u_xy, c_xy, ec["leg1"]),
@@ -238,23 +264,36 @@ def render_topographic_map(
                     f_sl.setGeometry(
                         QgsGeometry.fromPolylineXY([QgsPointXY(*start_xy), QgsPointXY(*end_xy)])
                     )
-                    cs_prov.addFeature(f_sl)
-                    if not leg_d["clear"] and "profile" in leg_d:
-                        w_xy = leg_d["profile"]["worst_xy"]
-                        f_blk_pt = QgsFeature()
-                        f_blk_pt.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*w_xy)))
-                        f_blk_pt.setAttributes([f"✕ {leg_d['min_clearance_m']:.0f}m"])
-                        cb_prov.addFeature(f_blk_pt)
+                    if leg_d["clear"]:
+                        ccs_prov.addFeature(f_sl)
+                    else:
+                        cs_prov.addFeature(f_sl)
+                        if "profile" in leg_d:
+                            w_xy = leg_d["profile"]["worst_xy"]
+                            f_blk_pt = QgsFeature()
+                            f_blk_pt.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*w_xy)))
+                            f_blk_pt.setAttributes([f"✕ {leg_d['min_clearance_m']:.0f}m"])
+                            cb_prov.addFeature(f_blk_pt)
 
         for c_key in candidate_keys:
             c_loc = config.locations[c_key]
             evals = cand_eval_by_key.get(c_key, [])
-            is_viable = any(e["viable"] for e in evals)
+            is_1hop_viable = any(e["viable"] for e in evals)
+            is_2hop_viable = bool(cand_2hop_f1.get(c_key))
+            is_hybrid_viable = bool(cand_hybrid_f1.get(c_key))
+            clear_legs = cand_clear_legs.get(c_key, [])
+            is_viable = is_1hop_viable or is_2hop_viable or is_hybrid_viable or bool(clear_legs)
             elev_m = evals[0]["elev_m"] if evals else dem.fetch_elevations([c_loc["xy"]])[0]
             elev_ft = elev_m * 3.28084
-            if is_viable:
+            if is_1hop_viable:
                 best_f1 = max(e["min_fresnel"] for e in evals if e["viable"])
                 status_txt = f"1-Hop: {best_f1*100:.0f}% F1"
+            elif is_2hop_viable:
+                best_f1 = max(cand_2hop_f1[c_key])
+                status_txt = f"2-Hop: {best_f1*100:.0f}% F1"
+            elif clear_legs:
+                best_town, best_f1 = max(clear_legs, key=lambda item: item[1])
+                status_txt = f"Clear → {best_town} ({best_f1*100:.0f}% F1)"
             elif evals:
                 e0 = evals[0]
                 l1_s = "OK" if e0["leg1"]["clear"] else f"{e0['leg1']['min_clearance_m']:.0f}m"
@@ -279,6 +318,7 @@ def render_topographic_map(
         explicit_viable_layer.updateExtents()
         explicit_blocked_layer.updateExtents()
         cand_sightline_layer.updateExtents()
+        cand_clear_sightline_layer.updateExtents()
         cand_blockage_layer.updateExtents()
 
     full_extent = node_layer.extent()
@@ -421,6 +461,14 @@ def render_topographic_map(
         })
         cand_sightline_layer.setRenderer(QgsSingleSymbolRenderer(cs_symbol))
         extra_cand_line_layers.append(cand_sightline_layer)
+
+        ccs_symbol = QgsLineSymbol.createSimple({
+            "color": "20,165,65,220",
+            "width": "0.95",
+            "line_style": "dash",
+        })
+        cand_clear_sightline_layer.setRenderer(QgsSingleSymbolRenderer(ccs_symbol))
+        extra_cand_line_layers.append(cand_clear_sightline_layer)
 
         cb_symbol = QgsMarkerSymbol.createSimple({
             "name": "cross2",
