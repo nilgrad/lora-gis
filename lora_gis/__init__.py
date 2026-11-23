@@ -6,7 +6,7 @@ from .dem import DEMProvider
 from .geonames import lookup_geonames_place, resolve_location
 from .utm import detect_utm_crs
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 __all__ = [
     "DEM_PRESETS",
     "DEMProvider",
