@@ -137,9 +137,20 @@ python3 -m lora_gis --state NY \
 
 Explicit candidates can also be configured in JSON via `"candidate_relays"` and `"candidate_height"`. The DEM bounding box and map extent automatically expand to cover all candidates, and the report includes leg-by-leg clearance tables, hub height sensitivity, 2-hop candidate pairs, and hybrid (candidate + grid) 2-hop solutions.
 
-### 5. Local DSM & Urban Surface Analysis (`--surface-mode dsm`)
+### 5. Urban Buildings & Local DSM Analysis (`--buildings osm`, `--surface-mode dsm`)
 
-To model buildings and tree canopy using a local georeferenced Digital Surface Model (DSM) GeoTIFF or a regional DSM ImageServer, enable `--surface-mode dsm` (or pass `--dsm-file` alongside a bare-earth DEM) and switch to an urban basemap:
+Overlay OpenStreetMap buildings, water towers, grain silos, and communications towers directly onto the USGS 3DEP bare-earth DEM (zero manual downloads) and optionally auto-evaluate the tallest structures as candidate relays:
+
+```bash
+# Stream USGS 3DEP DEM + OpenStreetMap buildings/towers and test top 5 tall structures
+python3 -m lora_gis \
+  --route west=38.840,-97.625 east=38.840,-97.595 \
+  --buildings osm \
+  --auto-candidates 5 \
+  --basemap osm
+```
+
+You can also use a local georeferenced Digital Surface Model (DSM) GeoTIFF or regional DSM ImageServer:
 
 ```bash
 # Single local DSM GeoTIFF stored in feet over OpenStreetMap
@@ -169,6 +180,8 @@ python3 -m lora_gis \
 | `--route`, `-r` | Ordered sequence of 2+ locations forming a route | None |
 | `--links`, `-l` | Explicit `LOC1:LOC2` point-to-point link pairs | None |
 | `--candidates`, `--candidate-relays` | Explicit candidate relay locations (`slug` or `name=lat,lon`) evaluated alongside the grid search | None |
+| `--auto-candidates` | Auto-select top `N` tallest structures from `--buildings` as candidate relays | `0` |
+| `--min-building-height` | Minimum structure height for `--auto-candidates` (`m` or `ft`) | `15m` |
 | `--state` | Default 2-letter US state code for USGS GeoNames lookups | None |
 
 #### Antenna & Relay Heights
@@ -179,7 +192,7 @@ python3 -m lora_gis \
 | `--observer-height` | Default endpoint antenna height (`ft` or `m`) | `33ft` (`10.0 m`) |
 | `--repeater-height` | Default hub repeater height in multi-leg routes (`ft` or `m`) | `30ft` (`9.14 m`) |
 | `--relay-height` | Intermediate candidate relay height (`ft` or `m`) | `60ft` (`18.3 m`) |
-| `--candidate-height` | Mount height override for explicit candidate relays (`ft` or `m`) | Predefined location height or `--relay-height` |
+| `--candidate-height` | Mount height override for explicit/auto candidate relays (`ft` or `m`) | Predefined height, `10ft` (auto-rooftop), or `--relay-height` |
 
 #### RF & Grid Search
 
@@ -200,6 +213,9 @@ python3 -m lora_gis \
 | `--dsm-file` | Optional separate local georeferenced DSM GeoTIFF (buildings/trees) overlaid for path obstructions | None |
 | `--dem-units` | Vertical elevation units of the DEM/DSM source (`m`, `ft`, `us-ft`) | `m` |
 | `--surface-mode` | Surface sampling mode: `dem` (bare-earth bilinear) or `dsm` (nearest-neighbor + dense urban sampling) | `dem` |
+| `--buildings` | Building & tall-structure overlay source (`none` or `osm` via Overpass API) | `none` |
+| `--default-building-height` | Fallback height for untagged OSM buildings (`m` or `ft`) | `6m` |
+| `--overpass-url` | Custom Overpass API interpreter URL for `--buildings osm` | Public Overpass mirrors |
 | `--sample-step` | Sightline ray sample spacing in meters | `5.0` (DSM) / `25.0` (DEM) |
 | `--rooftop-margin` | Near-field exclusion radius around endpoints in DSM mode (`m` or `ft`) | `12m` (DSM) / `0m` (DEM) |
 | `--crs` | Explicit metric EPSG code (auto-detected UTM zone if omitted) | Auto UTM |

@@ -25,6 +25,7 @@ def export_markdown_report(
     md_output_path: str,
     candidate_keys: Optional[List[str]] = None,
     profiles_filename: Optional[str] = None,
+    buildings: Optional[List] = None,
 ) -> None:
     """Exports the complete Markdown RF link & repeater report to `md_output_path`."""
     from qgis.core import QgsPointXY
@@ -61,6 +62,14 @@ def export_markdown_report(
         f"| **Intermediate Relay Height** | `{config.relay_height_m:.1f} m` (`{relay_ft:.1f} ft`) AGL |",
     ]
 
+    if buildings:
+        tall_cnt = sum(1 for b in buildings if b.height_m >= 15.0)
+        max_bh = max((b.height_m for b in buildings), default=0.0)
+        md_lines.append(
+            f"| **Building Overlay** | OpenStreetMap (`{len(buildings):,}` structures, "
+            f"`{tall_cnt}` >= 15 m, max height `{max_bh:.1f} m` / `{max_bh*3.28084:.0f} ft`) |"
+        )
+
     for k in active_location_keys:
         loc = config.locations[k]
         role_label = f"{loc['name']} (Repeater Hub)" if (multi_link_mode and k in hub_repeater_keys) else loc["name"]
@@ -75,10 +84,17 @@ def export_markdown_report(
         for k, c_elev_m in zip(candidate_keys, cand_elev_list):
             loc = config.locations[k]
             loc["elev_m"] = c_elev_m
+            extra_parts = []
+            if loc.get("building_height_m"):
+                bh_m = float(loc["building_height_m"])
+                extra_parts.append(f"Structure `{bh_m:.1f} m` (`{bh_m*3.28084:.0f} ft`)")
+            if loc.get("address"):
+                extra_parts.append(f"Address `{loc['address']}`")
+            extra_str = (", " + ", ".join(extra_parts)) if extra_parts else ""
             md_lines.append(
                 f"| **{loc['name']} (Candidate Relay)** | `{loc['lat']:.6f}, {loc['lon']:.6f}`, "
-                f"Ground Elev `{c_elev_m:.1f} m` (`{c_elev_m*3.28084:,.0f} ft`), "
-                f"Mount `{loc['height_m']:.2f} m` (`{loc['height_m']*3.28084:.1f} ft`) AGL |"
+                f"Ground Elev `{c_elev_m:.1f} m` (`{c_elev_m*3.28084:,.0f} ft`){extra_str}, "
+                f"Mount `{loc['height_m']:.2f} m` (`{loc['height_m']*3.28084:.1f} ft`) |"
             )
 
     for res in link_results:
