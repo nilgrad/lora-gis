@@ -53,7 +53,9 @@ python3 -m lora_gis --city "Salina, KS" --radius 3km --top 10 --rx-height 6ft
 
 ---
 
-## Sample Output (`Roscoe <-> Livingston Manor <-> Liberty`)
+## Sample Outputs
+
+### Mountain Terrain Routing (`Roscoe <-> Livingston Manor <-> Liberty, NY`)
 
 Generated with:
 
@@ -65,6 +67,19 @@ python3 -m lora_gis --state NY --dem ny-gis --route "Roscoe" "Livingston Manor" 
   - **Leg 1 (`Roscoe <-> Livingston Manor`, `7.95 km`)**: Direct sightline blocked by terrain (`-185.3 m` deficit); solved by a **2-Hop Repeater Pair** (`7.98 km` total path, `69%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing **Shandelee Ridge** with a grid relay (`14.77 km`, `56%` $F_1$).
   - **Leg 2 (`Livingston Manor <-> Liberty`, `12.93 km`)**: Direct sightline blocked by terrain (`-188.3 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `70%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing a grid relay with **Ferndale Ridge** (`23.90 km`, `58%` $F_1$).
   - **Explicit Candidate Relays & Terrain Blockage (`Shandelee Ridge`, `Ferndale Ridge`, `Willowemoc Ridge`)**: Evaluates three spaced-out ridge sites with cross-sectional terrain profiles ([`candidate_profiles.png`](examples/roscoe-livingston-manor-liberty/candidate_profiles.png)), green clear sightlines, and red `x` ridge blockage markers on [`map.png`](examples/roscoe-livingston-manor-liberty/map.png). **Shandelee Ridge** (`655 m / 2,148 ft`) has an unblocked leg to `Roscoe` (`87%` $F_1$, `+11.1 m`) and **Ferndale Ridge** (`441 m / 1,446 ft`) has an unblocked leg to `Liberty` (`61%` $F_1$, `+5.0 m`), while **Willowemoc Ridge** (`642 m`) is blocked across all legs (`-139.0 m` / `-107.9 m` / `-116.5 m`).
+
+### City Rooftop Viewshed & Building Clutter (`Salina, KS`)
+
+Generated with:
+
+```bash
+python3 -m lora_gis --city "Salina, KS" --radius 2.5km --top 8 --rx-height 6ft --mast-height 10ft
+```
+
+- **Full City Viewshed Report & Coverage Map**: [`examples/salina-ks-city-viewshed/report.md`](examples/salina-ks-city-viewshed/report.md) ([`map.png`](examples/salina-ks-city-viewshed/map.png))
+  - **12,281 OpenStreetMap Buildings Rasterized** at `2 m/px` on top of USGS 3DEP elevation data (`363 m` to `404 m`), evaluating 9 tall structures across `2,933` street-level (`6 ft` handheld) target points.
+  - **Top Ranked Single Site (`#1 Water Tower`, `35 m / 115 ft` + `10 ft` mast)**: Covers **`34.4%` optical LOS** and **`10.1%` >= 60% $F_1$** (`2.83 km` max clear range), outperforming downtown `#5 United Building` (`119 West Iron Avenue`, `35 m / 115 ft`, `34.1%` LOS / `6.6%` $F_1$) due to lower adjacent building shadowing.
+  - **Greedy 3-Site Combo (`Water Tower + 2 Radio Masts`)**: Expands city coverage to **`43.3%` optical LOS** and **`22.7%` >= 60% $F_1$** (more than doubling single-site Fresnel-clear coverage).
 
 ---
 

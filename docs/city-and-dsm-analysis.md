@@ -47,6 +47,8 @@ python3 -m lora_gis \
   - **Section 2: Top Ranked Rooftops & Tall Structures** (rank, structure name, type & street address, coordinates, ground elevation, structure height, mast height, `>= 60% F1` coverage %, optical LOS %, max clear range).
   - **Section 3: Optimal Multi-Site Combinations** (1-site, 2-site, and 3-site greedy set-cover with marginal $F_1$ gain).
 
+See a full real-world city viewshed report and heatmap for **Salina, KS** (`12,281` OSM structures over USGS 3DEP elevation) in [`examples/salina-ks-city-viewshed/report.md`](../examples/salina-ks-city-viewshed/report.md).
+
 ### Testing Specific Target Buildings in `--city` Mode
 
 You can combine `--city` with `--candidates` to force specific rooftops you already have access to into the ranking table alongside discovered tall structures:
