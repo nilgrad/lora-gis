@@ -76,6 +76,26 @@ def parse_height_value_m(val_str: str | float | int) -> float:
     return float(s)
 
 
+def parse_distance_m(val_str: str | float | int) -> float:
+    """Parses a distance string like '3km', '2mi', '2500m', or '5000ft' into meters."""
+    if isinstance(val_str, (int, float)):
+        return float(val_str)
+    s = str(val_str).strip().lower()
+    if s.endswith("km") or s.endswith("kilometers") or s.endswith("kilometres"):
+        num = float(re.sub(r"[^0-9.+-]", "", s))
+        return num * 1000.0
+    if s.endswith("mi") or s.endswith("mile") or s.endswith("miles"):
+        num = float(re.sub(r"[^0-9.+-]", "", s))
+        return num * 1609.344
+    if s.endswith("ft") or s.endswith("feet") or s.endswith("'"):
+        num = float(re.sub(r"[^0-9.+-]", "", s))
+        return num * FEET_TO_METERS
+    if s.endswith("m") or s.endswith("meters") or s.endswith("metres"):
+        num = float(re.sub(r"[^0-9.+-]", "", s))
+        return num
+    return float(s)
+
+
 @dataclass
 class LoRaGISConfig:
     """Complete configuration for a LoRa / MeshCore GIS RF pathfinding analysis."""
@@ -138,10 +158,21 @@ class LoRaGISConfig:
     topo_basemap_url: str = DEFAULT_TOPO_BASEMAP_URL
     fallback_basemap_url: str = DEFAULT_FALLBACK_BASEMAP_URL
 
+    # City viewshed & rooftop ranking settings
+    city_target: Optional[str] = None         # Center place or 'name=lat,lon' for --city mode
+    city_radius_m: float = 3000.0             # Study radius (m) around city center
+    city_top_n: int = 10                      # Top N ranked structures in report & map
+    city_rx_height_m: float = 1.83            # ~6 ft handheld target receiver height AGL
+    city_mast_height_m: float = 3.05          # ~10 ft rooftop mast height above structure
+    city_max_sites: int = 25                  # Max candidate structures evaluated before ranking top N
+    viewshed_grid_size: int = 61              # Cartesian target grid samples per axis
+
     # Runtime populated fields
     active_links: List[Tuple[str, str]] = field(default_factory=list)
     active_candidate_keys: List[str] = field(default_factory=list)
     custom_height_keys: set = field(default_factory=set)
+    basemap_explicit: bool = False
+    buildings_explicit: bool = False
 
     @property
     def wavelength_m(self) -> float:
@@ -165,6 +196,7 @@ class LoRaGISConfig:
             self.surface_mode.strip().lower() == "dsm"
             or self.dsm_file is not None
             or self.buildings_source.strip().lower() != "none"
+            or self.city_target is not None
         )
 
     @property
@@ -219,8 +251,10 @@ class LoRaGISConfig:
             self.surface_mode = str(data["surface_mode"])
         if "buildings" in data:
             self.buildings_source = str(data["buildings"])
+            self.buildings_explicit = True
         elif "buildings_source" in data:
             self.buildings_source = str(data["buildings_source"])
+            self.buildings_explicit = True
         if "default_building_height" in data:
             self.default_building_height_m = parse_height_value_m(data["default_building_height"])
         elif "default_building_height_m" in data:
@@ -233,6 +267,22 @@ class LoRaGISConfig:
             self.min_building_height_m = parse_height_value_m(data["min_building_height"])
         elif "min_building_height_m" in data:
             self.min_building_height_m = float(data["min_building_height_m"])
+        if "city" in data:
+            self.city_target = str(data["city"])
+        if "radius" in data:
+            self.city_radius_m = parse_distance_m(data["radius"])
+        elif "city_radius_m" in data:
+            self.city_radius_m = float(data["city_radius_m"])
+        if "top" in data:
+            self.city_top_n = int(data["top"])
+        if "rx_height" in data:
+            self.city_rx_height_m = parse_height_value_m(data["rx_height"])
+        if "mast_height" in data:
+            self.city_mast_height_m = parse_height_value_m(data["mast_height"])
+        if "max_sites" in data:
+            self.city_max_sites = int(data["max_sites"])
+        if "viewshed_grid" in data:
+            self.viewshed_grid_size = int(data["viewshed_grid"])
         if "sample_step_m" in data:
             self.sample_step_m = float(data["sample_step_m"])
         if "rooftop_margin" in data:
@@ -241,6 +291,7 @@ class LoRaGISConfig:
             self.rooftop_margin_m = float(data["rooftop_margin_m"])
         if "basemap" in data:
             self.basemap = str(data["basemap"])
+            self.basemap_explicit = True
         if "initial_grid_step_m" in data:
             self.initial_grid_step_m = float(data["initial_grid_step_m"])
         if "min_grid_step_m" in data:
