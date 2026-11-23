@@ -192,13 +192,13 @@ if __name__ == "__main__":
 Generated with:
 
 ```bash
-python3 -m lora_gis --state NY --dem ny-gis --route "Roscoe" "Livingston Manor" "Liberty" --hops 2 --candidates "burnt-hill=41.96378,-74.85179" "tennanah-ridge=41.8619,-74.8964" "cooley-ridge=41.8511,-74.7107"
+python3 -m lora_gis --state NY --dem ny-gis --route "Roscoe" "Livingston Manor" "Liberty" --hops 2 --candidates "tennanah-ridge=41.8800,-74.9313" "briscoe-ridge=41.7953,-74.8609" "willowemoc-ridge=41.9056,-74.6774"
 ```
 
 - **Full RF Analysis Report, Topographic Map & Terrain Profiles**: [`examples/roscoe-livingston-manor-liberty/report.md`](examples/roscoe-livingston-manor-liberty/report.md)
-  - **Leg 1 (`Roscoe ↔ Livingston Manor`, `7.95 km`)**: Direct sightline blocked by terrain (`-185.4 m` deficit); solved by a **2-Hop Repeater Pair** (`7.98 km` total path, `68%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing a grid relay with **Burnt Hill** (`15.30 km`, `128%` $F_1$).
-  - **Leg 2 (`Livingston Manor ↔ Liberty`, `12.93 km`)**: Direct sightline blocked by terrain (`-188.4 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `70%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing **Burnt Hill** with a grid relay (`27.36 km`, `99%` $F_1$).
-  - **Explicit Candidate Relays & Terrain Blockage (`Burnt Hill`, `Tennanah Ridge`, `Cooley Ridge`)**: Evaluates three spaced-out highland candidates across both links with cross-sectional terrain obstruction plots ([`candidate_profiles.png`](examples/roscoe-livingston-manor-liberty/candidate_profiles.png)) and red `✕` ridge blockage markers on [`map.png`](examples/roscoe-livingston-manor-liberty/map.png). **Burnt Hill** (`702 m / 2,303 ft`) clears `Livingston Manor` (`156%` $F_1$, `+9.6 m`) while blocked toward `Roscoe` (`-161.8 m`) and `Liberty` (`-151.6 m`); **Cooley Ridge** (`674 m`) misses clearing `Liberty` by `-7.1 m` (`-23 ft`), and **Tennanah Ridge** (`648 m`) is obstructed on all legs (`-101.2 m` / `-108.0 m` / `-134.7 m`).
+  - **Leg 1 (`Roscoe ↔ Livingston Manor`, `7.95 km`)**: Direct sightline blocked by terrain (`-185.3 m` deficit); solved by a **2-Hop Repeater Pair** (`7.98 km` total path, `69%` worst-case $F_1$ clearance).
+  - **Leg 2 (`Livingston Manor ↔ Liberty`, `12.93 km`)**: Direct sightline blocked by terrain (`-188.4 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `70%` worst-case $F_1$ clearance).
+  - **Explicit Candidate Relays & Terrain Blockage (`Tennanah Ridge`, `Briscoe Ridge`, `Willowemoc Ridge`)**: Evaluates three widely spaced off-corridor ridge sites across both links with cross-sectional terrain obstruction plots ([`candidate_profiles.png`](examples/roscoe-livingston-manor-liberty/candidate_profiles.png)) and red `✕` ridge blockage markers on [`map.png`](examples/roscoe-livingston-manor-liberty/map.png). All three candidates are obstructed by mid-path Catskill ridges (`Tennanah Ridge`: `-144.9 m` / `-131.6 m` / `-146.2 m`; `Briscoe Ridge`: `-214.7 m` / `-169.9 m` / `-139.2 m`; `Willowemoc Ridge`: `-138.9 m` / `-107.8 m` / `-116.4 m`), showing why valley-to-valley links along this route require intermediate ridge relays.
 
 ---
 

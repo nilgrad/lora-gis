@@ -481,6 +481,7 @@ def render_topographic_map(
             c_lbl.fieldName = "LabelText"
             c_lbl.isExpression = False
             c_lbl.dist = 2.0
+            c_lbl.priority = 8
             c_lbl.setFormat(c_tf)
             lyr.setLabeling(QgsVectorLayerSimpleLabeling(c_lbl))
             lyr.setLabelsEnabled(True)
@@ -492,6 +493,19 @@ def render_topographic_map(
     map_settings = QgsMapSettings()
     map_settings.setDestinationCrs(crs_utm)
     map_settings.setTransformContext(QgsProject.instance().transformContext())
+    try:
+        from qgis.core import Qgis, QgsLabelingEngineSettings
+        les = map_settings.labelingEngineSettings()
+        partial_flag = getattr(
+            getattr(Qgis, "LabelingFlag", None),
+            "UsePartialCandidates",
+            getattr(QgsLabelingEngineSettings, "UsePartialCandidates", None),
+        )
+        if partial_flag is not None:
+            les.setFlag(partial_flag, False)
+            map_settings.setLabelingEngineSettings(les)
+    except Exception:
+        pass
 
     render_layers = [node_layer, *extra_cand_layers, peak_layer, town_layer, line_layer, onehop_layer, *extra_cand_line_layers, blocked_layer, cand_layer]
     if topo_layer.isValid():
