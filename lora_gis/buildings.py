@@ -339,7 +339,7 @@ def fetch_osm_buildings(
             req = urllib.request.Request(
                 endpoint,
                 data=data,
-                headers={"User-Agent": "lora-gis/1.1 (+https://github.com/nilgrad/lora-gis)"},
+                headers={"User-Agent": "lora-gis/1.2 (+https://github.com/nilgrad/lora-gis)"},
             )
             with urllib.request.urlopen(req, timeout=timeout_s + 5.0) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))

@@ -109,7 +109,7 @@ def load_usgs_ept_index(
             print(f"Downloading USGS 3DEP EPT project index ({url})...", flush=True)
             req = urllib.request.Request(
                 url,
-                headers={"User-Agent": "lora-gis/1.1 (+https://github.com/nilgrad/lora-gis)"},
+                headers={"User-Agent": "lora-gis/1.2 (+https://github.com/nilgrad/lora-gis)"},
             )
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:
                 raw_bytes = resp.read()
