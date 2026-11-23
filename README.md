@@ -187,17 +187,18 @@ if __name__ == "__main__":
 
 ---
 
-## Sample Output (`Livingston Manor ↔ Liberty ↔ Monticello`)
+## Sample Output (`Roscoe ↔ Livingston Manor ↔ Liberty`)
 
 Generated with:
 
 ```bash
-python3 -m lora_gis --state NY --dem ny-gis --route "Livingston Manor" "Liberty" "Monticello" --hops 2
+python3 -m lora_gis --state NY --dem ny-gis --route "Roscoe" "Livingston Manor" "Liberty" --hops 2 --candidates "burnt-hill=41.96378,-74.85179" "Shandelee" "bald-mountain=41.90288,-74.72437"
 ```
 
-- **Full RF Analysis Report & Topographic Map**: [`examples/livingston-manor-liberty-monticello/report.md`](examples/livingston-manor-liberty-monticello/report.md)
-  - **Leg 1 (`Livingston Manor ↔ Liberty`, `12.93 km`)**: Direct sightline blocked by Revonah Hill & Grants Hill (`-188.7 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `69%` worst-case $F_1$ clearance).
-  - **Leg 2 (`Liberty ↔ Monticello`, `16.85 km`)**: Direct sightline blocked (`-32.7 m` deficit); solved by a **1-Hop Single Repeater** on Walnut Mountain (`652 m / 2,140 ft`, `43%` $F_1$) or a **2-Hop Repeater Pair** (`16.85 km` total path, `67%` $F_1$).
+- **Full RF Analysis Report, Topographic Map & Terrain Profiles**: [`examples/roscoe-livingston-manor-liberty/report.md`](examples/roscoe-livingston-manor-liberty/report.md)
+  - **Leg 1 (`Roscoe ↔ Livingston Manor`, `7.95 km`)**: Direct sightline blocked by terrain (`-185.5 m` deficit); solved by a **2-Hop Repeater Pair** (`7.98 km` total path, `68%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing a grid relay with **Burnt Hill** (`15.30 km`, `129%` $F_1$).
+  - **Leg 2 (`Livingston Manor ↔ Liberty`, `12.93 km`)**: Direct sightline blocked by terrain (`-188.4 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `70%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing **Burnt Hill** with a grid relay (`27.36 km`, `99%` $F_1$).
+  - **Explicit Candidate Relays & Terrain Blockage (`Burnt Hill`, `Shandelee`, `Bald Mountain`)**: Evaluates three spaced-out highland candidates across both links with cross-sectional terrain obstruction plots ([`candidate_profiles.png`](examples/roscoe-livingston-manor-liberty/candidate_profiles.png)) and red `✕` ridge blockage markers on [`map.png`](examples/roscoe-livingston-manor-liberty/map.png). **Burnt Hill** (`702 m / 2,303 ft`) clears `Livingston Manor` (`156%` $F_1$, `+9.5 m`) while blocked toward `Roscoe` (`-161.8 m`) and `Liberty` (`-151.6 m`), whereas **Shandelee** (`645 m`) and **Bald Mountain** (`701 m`) are obstructed by intervening ridges on all legs.
 
 ---
 

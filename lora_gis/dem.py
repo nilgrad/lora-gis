@@ -142,11 +142,15 @@ class DEMProvider:
             try:
                 with urllib.request.urlopen(req, timeout=5.0) as response:
                     res_json = json.loads(response.read().decode("utf-8"))
-                    for s in res_json.get("samples", []):
-                        try:
-                            elevations.append(float(s.get("value")))
-                        except (TypeError, ValueError):
-                            elevations.append(-9999.0)
+                    batch_vals = [-9999.0] * len(batch)
+                    for idx_s, s in enumerate(res_json.get("samples", [])):
+                        loc_id = s.get("locationId", idx_s)
+                        if isinstance(loc_id, int) and 0 <= loc_id < len(batch):
+                            try:
+                                batch_vals[loc_id] = float(s.get("value"))
+                            except (TypeError, ValueError):
+                                batch_vals[loc_id] = -9999.0
+                    elevations.extend(batch_vals)
             except Exception:
                 elevations.extend([-9999.0] * len(batch))
 
