@@ -15,13 +15,14 @@ from .buildings import (
     rasterize_buildings_onto_dem,
     select_tall_structure_candidates,
 )
-from .cartography import render_candidate_profiles, render_topographic_map
-from .config import LoRaGISConfig, normalize_loc_key, parse_height_value_m
+from .cartography import render_candidate_profiles, render_city_viewshed_map, render_topographic_map
+from .config import LoRaGISConfig, normalize_loc_key, parse_distance_m, parse_height_value_m
 from .dem import DEMProvider
 from .geonames import parse_link_pair, resolve_location
-from .report import export_markdown_report
+from .report import export_city_markdown_report, export_markdown_report
 from .rf import analyze_link, compute_link_padding
 from .utm import detect_utm_crs, parse_crs_wkid
+from .viewshed import analyze_city_viewshed
 
 _MANAGED_QGS_APP = None
 
@@ -45,7 +46,7 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
             '  lora-gis --route "Beacon, NY" "New Paltz, NY"\n'
             '  lora-gis --route "Boulder, CO" "Nederland, CO" --relay-height 40ft\n'
             "  lora-gis --links site_a=41.885,-74.555:site_b=41.920,-74.660 --hops 2\n"
-            "  lora-gis --route a=38.840,-97.625 b=38.840,-97.595 --dem-file city_dsm.tif --surface-mode dsm --basemap osm\n"
+            '  lora-gis --city "Salina, KS" --radius 3km --top 10 --rx-height 6ft\n'
             "  lora-gis --config network.json\n"
         ),
     )
@@ -214,6 +215,50 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
         help="Override metric projection EPSG code (e.g. 'EPSG:26918'); auto-detected from lat/lon by default",
     )
 
+    city_group = parser.add_argument_group("City Viewshed Mode")
+    city_group.add_argument(
+        "--city",
+        default=None,
+        metavar="LOCATION",
+        help="Run city rooftop ranking & viewshed coverage mode centered on a place or 'name=lat,lon'",
+    )
+    city_group.add_argument(
+        "--radius",
+        default=None,
+        help="Study radius around --city, e.g. '3km', '2mi', or '2500m' (default: 3km)",
+    )
+    city_group.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of top-ranked rooftop sites to display in --city mode (default: 10)",
+    )
+    city_group.add_argument(
+        "--rx-height",
+        default=None,
+        help="Target receiver antenna height AGL across the city, e.g. '6ft' or '25ft' (default: 6ft)",
+    )
+    city_group.add_argument(
+        "--mast-height",
+        default=None,
+        help="Antenna mast height above candidate rooftops in --city mode, e.g. '10ft' (default: 10ft)",
+    )
+    city_group.add_argument(
+        "--max-sites",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Maximum candidate structures evaluated before ranking --top N in --city mode (default: 25)",
+    )
+    city_group.add_argument(
+        "--viewshed-grid",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cartesian target grid samples per axis for --city viewshed scoring (default: 61)",
+    )
+
     output_group = parser.add_argument_group("Map & Output")
     output_group.add_argument(
         "--basemap",
@@ -290,6 +335,7 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.surface_mode = args.surface_mode
     if args.buildings is not None:
         config.buildings_source = args.buildings
+        config.buildings_explicit = True
     if args.default_building_height is not None:
         config.default_building_height_m = parse_height_value_m(args.default_building_height)
     if args.overpass_url is not None:
@@ -298,12 +344,27 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.auto_candidates = max(0, int(args.auto_candidates))
     if args.min_building_height is not None:
         config.min_building_height_m = parse_height_value_m(args.min_building_height)
+    if args.city is not None:
+        config.city_target = args.city
+    if args.radius is not None:
+        config.city_radius_m = parse_distance_m(args.radius)
+    if args.top is not None:
+        config.city_top_n = max(1, int(args.top))
+    if args.rx_height is not None:
+        config.city_rx_height_m = parse_height_value_m(args.rx_height)
+    if args.mast_height is not None:
+        config.city_mast_height_m = parse_height_value_m(args.mast_height)
+    if args.max_sites is not None:
+        config.city_max_sites = max(1, int(args.max_sites))
+    if args.viewshed_grid is not None:
+        config.viewshed_grid_size = max(11, int(args.viewshed_grid))
     if args.sample_step is not None:
         config.sample_step_m = args.sample_step
     if args.rooftop_margin is not None:
         config.rooftop_margin_m = parse_height_value_m(args.rooftop_margin)
     if args.basemap is not None:
         config.basemap = args.basemap
+        config.basemap_explicit = True
     if args.crs is not None:
         config.crs_epsg = args.crs
     if args.output_dir is not None:
@@ -346,8 +407,196 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
     return config
 
 
+def _ensure_qgis_app():
+    """Initializes or reuses the managed headless QgsApplication singleton."""
+    global _MANAGED_QGS_APP
+    os.environ.setdefault("QGIS_CUSTOM_CONFIG_PATH", os.path.join(tempfile.gettempdir(), "qgis_los_config"))
+    if sys.platform.startswith("linux"):
+        xdg_dir = os.environ.get("XDG_RUNTIME_DIR", "")
+        wl_disp = os.environ.get("WAYLAND_DISPLAY", "")
+        has_wayland = bool(wl_disp) and bool(xdg_dir) and os.path.exists(os.path.join(xdg_dir, wl_disp))
+        if not os.environ.get("DISPLAY") and not has_wayland:
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    from qgis.core import QgsApplication
+
+    headless_cli = False
+    if QgsApplication.instance() is None:
+        headless_cli = True
+        qgis_prefix = os.environ.get("QGIS_PREFIX_PATH")
+        if not qgis_prefix:
+            if os.environ.get("CONDA_PREFIX"):
+                conda_p = os.environ["CONDA_PREFIX"]
+                qgis_prefix = os.path.join(conda_p, "Library") if sys.platform == "win32" else conda_p
+            elif sys.platform == "darwin":
+                for app_cand in (
+                    "/Applications/QGIS.app/Contents/MacOS",
+                    "/Applications/QGIS-LTR.app/Contents/MacOS",
+                ):
+                    if os.path.isdir(app_cand):
+                        qgis_prefix = app_cand
+                        break
+            elif os.path.isdir("/usr"):
+                qgis_prefix = "/usr"
+        if qgis_prefix:
+            QgsApplication.setPrefixPath(qgis_prefix, True)
+        _MANAGED_QGS_APP = QgsApplication([], False)
+        _MANAGED_QGS_APP.initQgis()
+        atexit.register(_shutdown_managed_qgis)
+    elif _MANAGED_QGS_APP is not None:
+        headless_cli = True
+    return headless_cli
+
+
+def _run_city_analysis(config: LoRaGISConfig) -> Dict:
+    """Executes --city rooftop viewshed ranking, urban map rendering, and Markdown report export."""
+    assert config.city_target is not None
+    center_key = resolve_location(config.city_target, config)
+    center_loc = config.locations[center_key]
+
+    if not config.active_candidate_keys and config.candidate_relays:
+        for cand_tok in config.candidate_relays:
+            cand_key = _resolve_candidate_token(cand_tok, config)
+            if cand_key not in config.active_candidate_keys:
+                config.active_candidate_keys.append(cand_key)
+
+    # Smart urban defaults in --city mode unless overridden
+    if not config.basemap_explicit:
+        config.basemap = "osm"
+    if not config.buildings_explicit and config.dem_file is None and config.dsm_file is None:
+        config.buildings_source = "osm"
+
+    headless_cli = _ensure_qgis_app()
+    from qgis.core import (
+        QgsCoordinateReferenceSystem,
+        QgsCoordinateTransform,
+        QgsPointXY,
+        QgsProject,
+    )
+
+    try:
+        if config.crs_epsg:
+            epsg_str, wkid, zone_label = parse_crs_wkid(config.crs_epsg)
+        else:
+            epsg_str, wkid, zone_label = detect_utm_crs(center_loc["lat"], center_loc["lon"])
+
+        timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        expanded_out = os.path.expanduser(config.output_dir)
+        base_output_dir = (
+            expanded_out if os.path.isabs(expanded_out) else os.path.join(config.base_dir, expanded_out)
+        )
+        run_output_dir = os.path.join(base_output_dir, timestamp_str)
+        os.makedirs(run_output_dir, exist_ok=True)
+        png_filename = "map.png"
+        md_filename = "report.md"
+        png_output_path = os.path.join(run_output_dir, png_filename)
+        md_output_path = os.path.join(run_output_dir, md_filename)
+
+        crs_wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+        crs_utm = QgsCoordinateReferenceSystem(epsg_str)
+        transform = QgsCoordinateTransform(crs_wgs84, crs_utm, QgsProject.instance())
+        inv_transform = QgsCoordinateTransform(crs_utm, crs_wgs84, QgsProject.instance())
+
+        pt_c = transform.transform(QgsPointXY(center_loc["lon"], center_loc["lat"]))
+        center_loc["x"] = float(pt_c.x())
+        center_loc["y"] = float(pt_c.y())
+        center_loc["xy"] = (center_loc["x"], center_loc["y"])
+
+        for c_key in config.active_candidate_keys:
+            c_loc = config.locations[c_key]
+            pt_cand = transform.transform(QgsPointXY(c_loc["lon"], c_loc["lat"]))
+            c_loc["x"] = float(pt_cand.x())
+            c_loc["y"] = float(pt_cand.y())
+            c_loc["xy"] = (c_loc["x"], c_loc["y"])
+
+        rad = float(config.city_radius_m)
+        pad = max(250.0, 0.1 * rad)
+        dem_xmin = center_loc["x"] - rad - pad
+        dem_ymin = center_loc["y"] - rad - pad
+        dem_xmax = center_loc["x"] + rad + pad
+        dem_ymax = center_loc["y"] + rad + pad
+
+        dem = DEMProvider(
+            image_server_base=config.image_server_base,
+            wkid=wkid,
+            dem_file=config.dem_file,
+            unit_scale=config.dem_unit_scale,
+            sampling_mode="nearest" if config.is_dsm_mode else "bilinear",
+            dsm_file=config.dsm_file,
+        )
+        dem.load_raster(dem_xmin, dem_ymin, dem_xmax, dem_ymax, resolution_m=2.0, max_px=4000)
+
+        buildings_list: List[BuildingFeature] = []
+        if config.buildings_source.strip().lower() == "osm":
+            sw_ll = inv_transform.transform(QgsPointXY(dem_xmin, dem_ymin))
+            ne_ll = inv_transform.transform(QgsPointXY(dem_xmax, dem_ymax))
+            bbox_wgs84 = (
+                min(sw_ll.y(), ne_ll.y()),
+                min(sw_ll.x(), ne_ll.x()),
+                max(sw_ll.y(), ne_ll.y()),
+                max(sw_ll.x(), ne_ll.x()),
+            )
+
+            def _proj_ll(lon_v: float, lat_v: float):
+                p = transform.transform(QgsPointXY(lon_v, lat_v))
+                return (float(p.x()), float(p.y()))
+
+            buildings_list = fetch_osm_buildings(
+                bbox_wgs84=bbox_wgs84,
+                proj_fn=_proj_ll,
+                overpass_url=config.overpass_url,
+                default_building_height_m=config.default_building_height_m,
+            )
+            if buildings_list and dem.cache is not None and not dem.has_separate_surface:
+                rasterize_buildings_onto_dem(dem, buildings_list, target_res_m=2.0, max_px=4000)
+
+        city_result = analyze_city_viewshed(
+            center_loc=center_loc,
+            config=config,
+            dem=dem,
+            inv_transform=inv_transform,
+            buildings=buildings_list,
+            explicit_candidate_keys=config.active_candidate_keys,
+        )
+
+        render_city_viewshed_map(
+            config=config,
+            city_result=city_result,
+            buildings=buildings_list,
+            crs_utm=crs_utm,
+            epsg_str=epsg_str,
+            wkid=wkid,
+            timestamp_str=timestamp_str,
+            png_output_path=png_output_path,
+        )
+        export_city_markdown_report(
+            config=config,
+            city_result=city_result,
+            zone_label=zone_label,
+            timestamp_str=timestamp_str,
+            png_filename=png_filename,
+            md_output_path=md_output_path,
+            buildings=buildings_list,
+        )
+
+        return {
+            "mode": "city",
+            "run_output_dir": run_output_dir,
+            "png_output_path": png_output_path,
+            "md_output_path": md_output_path,
+            "city_result": city_result,
+            "buildings_count": len(buildings_list),
+        }
+    finally:
+        if headless_cli:
+            QgsProject.instance().clear()
+
+
 def run_analysis(config: LoRaGISConfig) -> Dict:
-    """Executes the full DEM streaming, RF LOS pathfinding, PyQGIS map rendering, and report generation."""
+    """Executes the full DEM streaming, RF LOS pathfinding (or --city viewshed), PyQGIS map rendering, and report generation."""
+    if config.city_target is not None:
+        return _run_city_analysis(config)
+
     if not config.active_links:
         if config.default_links:
             for u_tok, v_tok in config.default_links:
@@ -358,7 +607,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 config.active_links.append((resolved_default[i], resolved_default[i + 1]))
         else:
             raise SystemExit(
-                "Error: No route or links specified. Pass '--route LOC1 LOC2', '--links LOC1:LOC2', or '--config FILE'."
+                "Error: No route, links, or city specified. Pass '--route LOC1 LOC2', '--links LOC1:LOC2', '--city PLACE', or '--config FILE'."
             )
 
     if not config.active_candidate_keys and config.candidate_relays:

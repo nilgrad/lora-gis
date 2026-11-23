@@ -414,3 +414,91 @@ def export_markdown_report(
         md_file.write("\n".join(md_lines) + "\n")
 
     print(f"Markdown Analysis Report exported to:                {md_output_path}", flush=True)
+
+
+def export_city_markdown_report(
+    config: LoRaGISConfig,
+    city_result: Dict,
+    zone_label: str,
+    timestamp_str: str,
+    png_filename: str,
+    md_output_path: str,
+    buildings: Optional[List] = None,
+) -> None:
+    """Exports the Markdown city rooftop ranking & viewshed coverage report."""
+    center = city_result["center_loc"]
+    rad_km = city_result["radius_m"] / 1000.0
+    rad_mi = city_result["radius_m"] * 0.000621371
+    freq_label = f"{config.freq_mhz:.0f}" if config.freq_mhz.is_integer() else f"{config.freq_mhz:.1f}"
+    f1_pct_target = int(round(config.min_fresnel_clearance * 100))
+    tg = city_result["target_grid"]
+
+    md_lines = [
+        f"# {config.title} {freq_label} MHz City Viewshed & Rooftop Ranking: {center['name']} ({timestamp_str})",
+        "",
+        f"![City Viewshed Coverage Map]({png_filename})",
+        "",
+        "## 1. City Study Overview",
+        "",
+        "| Parameter | Value |",
+        "| :--- | :--- |",
+        f"| **Study Center** | **{center['name']}** (`{center['lat']:.6f}, {center['lon']:.6f}`, {zone_label}) |",
+        f"| **Study Radius** | `{rad_km:.2f} km` (`{rad_mi:.2f} mi`), `{len(tg['target_xy']):,}` target points (`~{tg['cell_size_m']:.0f} m` spacing) |",
+        f"| **Operating Frequency** | `{config.freq_mhz:.1f} MHz` (LoRa / MeshCore, $\\lambda = {config.wavelength_m*100:.1f}\\text{{ cm}}$) |",
+        f"| **Target Fresnel Clearance** | `>= {f1_pct_target}%` of 1st Fresnel Zone ($F_1$), $K = 4/3$ Earth Curvature |",
+        f"| **Rooftop Mast Height** | `{config.city_mast_height_m:.2f} m` (`{config.city_mast_height_m*3.28084:.1f} ft`) above structure |",
+        f"| **Target Receiver Height** | `{config.city_rx_height_m:.2f} m` (`{config.city_rx_height_m*3.28084:.1f} ft`) AGL |",
+        f"| **Surface Sampling** | DSM nearest-neighbor (`{config.effective_sample_step_m:.1f} m` ray step, `{config.effective_rooftop_margin_m:.1f} m` rooftop margin) |",
+        f"| **Candidates Evaluated** | `{len(city_result['all_results'])}` structures (showing top `{len(city_result['top_results'])}`) |",
+    ]
+
+    if buildings:
+        tall_cnt = sum(1 for b in buildings if b.height_m >= config.min_building_height_m)
+        max_bh = max((b.height_m for b in buildings), default=0.0)
+        md_lines.append(
+            f"| **Building Overlay** | OpenStreetMap (`{len(buildings):,}` structures, "
+            f"`{tall_cnt}` >= {config.min_building_height_m:.0f} m, max `{max_bh:.1f} m` / `{max_bh*3.28084:.0f} ft`) |"
+        )
+    md_lines.append("")
+
+    top_results = city_result.get("top_results", [])
+    md_lines.extend([
+        f"## 2. Top Ranked Rooftops & Tall Structures (Top {len(top_results)})",
+        "",
+        f"| Rank | Structure | Type / Address | Coordinates (Lat, Lon) | Ground Elev | Height | Mast | >= {f1_pct_target}% $F_1$ Coverage | Optical LOS Coverage | Max Clear Range |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+    ])
+    for rank_idx, cand in enumerate(top_results, 1):
+        type_clean = cand.structure_type.replace("_", " ").title()
+        meta_col = f"{type_clean}, `{cand.address}`" if cand.address else type_clean
+        md_lines.append(
+            f"| `#{rank_idx}` | **{cand.name}** | {meta_col} | `{cand.lat:.6f}, {cand.lon:.6f}` | "
+            f"`{cand.ground_elev_m:.0f} m` (`{cand.ground_elev_m*3.28084:,.0f} ft`) | "
+            f"`{cand.structure_height_m:.1f} m` (`{cand.structure_height_m*3.28084:.0f} ft`) | "
+            f"`{cand.mast_height_m*3.28084:.0f} ft` | "
+            f"**`{cand.f1_pct:.1f}%`** | `{cand.los_pct:.1f}%` | "
+            f"`{cand.max_f1_range_m/1000.0:.2f} km` (`{cand.max_f1_range_m*0.000621371:.2f} mi`) |"
+        )
+    md_lines.append("")
+
+    combos = city_result.get("combos", [])
+    if combos:
+        md_lines.extend([
+            "## 3. Optimal Multi-Site Combinations (Greedy Set-Cover)",
+            "",
+            f"| Sites | Added Structure | Marginal $F_1$ Gain | Cumulative >= {f1_pct_target}% $F_1$ | Cumulative Optical LOS |",
+            "| :--- | :--- | :--- | :--- | :--- |",
+        ])
+        for combo in combos:
+            added = combo["added"]
+            md_lines.append(
+                f"| **{combo['size']}-Site** | **{added.name}** (`{added.lat:.5f}, {added.lon:.5f}`) | "
+                f"`+{combo['marginal_f1_pct']:.1f}%` | **`{combo['cumulative_f1_pct']:.1f}%`** | "
+                f"`{combo['cumulative_los_pct']:.1f}%` |"
+            )
+        md_lines.append("")
+
+    with open(md_output_path, "w", encoding="utf-8") as md_file:
+        md_file.write("\n".join(md_lines) + "\n")
+
+    print(f"City Viewshed Markdown Report exported to:  {md_output_path}", flush=True)

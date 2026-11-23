@@ -814,3 +814,288 @@ def render_candidate_profiles(
     plt.close(fig)
     print(f"Candidate Terrain Blockage Profiles exported to:     {png_output_path}", flush=True)
     return png_output_path
+
+
+def _write_coverage_rgba_geotiff(
+    cov_2d,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    epsg_wkid: int,
+    out_path: str,
+) -> bool:
+    """Writes a georeferenced 4-band RGBA GeoTIFF for the city viewshed coverage heatmap."""
+    import numpy as np
+
+    try:
+        from osgeo import gdal, osr
+        if gdal.GetDriverCount() == 0:
+            gdal.AllRegister()
+        gdal.UseExceptions()
+    except ImportError:
+        return False
+
+    h, w = cov_2d.shape
+    rgba = np.zeros((4, h, w), dtype=np.uint8)
+    # 1 = optical LOS only -> semi-transparent amber
+    los_only = cov_2d == 1
+    rgba[0, los_only] = 245
+    rgba[1, los_only] = 190
+    rgba[2, los_only] = 20
+    rgba[3, los_only] = 105
+    # 2 = >= target F1 clear -> semi-transparent emerald green
+    f1_ok = cov_2d == 2
+    rgba[0, f1_ok] = 28
+    rgba[1, f1_ok] = 185
+    rgba[2, f1_ok] = 85
+    rgba[3, f1_ok] = 125
+
+    dx = (xmax - xmin) / max(1, w)
+    dy = (ymax - ymin) / max(1, h)
+    driver = gdal.GetDriverByName("GTiff")
+    ds = driver.Create(out_path, w, h, 4, gdal.GDT_Byte)
+    ds.SetGeoTransform((float(xmin), float(dx), 0.0, float(ymax), 0.0, -float(dy)))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(int(epsg_wkid))
+    ds.SetProjection(srs.ExportToWkt())
+    for band_idx in range(4):
+        ds.GetRasterBand(band_idx + 1).WriteArray(rgba[band_idx])
+    ds.FlushCache()
+    ds = None
+    return True
+
+
+def render_city_viewshed_map(
+    config: LoRaGISConfig,
+    city_result: Dict,
+    buildings: Optional[List],
+    crs_utm,
+    epsg_str: str,
+    wkid: int,
+    timestamp_str: str,
+    png_output_path: str,
+) -> None:
+    """
+    Renders the city rooftop viewshed coverage map: street/satellite basemap,
+    height-shaded building footprints, semi-transparent LOS/Fresnel coverage heatmap,
+    study radius circle, and numbered top candidate site pins.
+    """
+    import math
+    import os
+    import tempfile
+
+    from qgis.core import (
+        QgsFeature,
+        QgsFillSymbol,
+        QgsGeometry,
+        QgsLineSymbol,
+        QgsMapRendererSequentialJob,
+        QgsMapSettings,
+        QgsMarkerSymbol,
+        QgsPalLayerSettings,
+        QgsPointXY,
+        QgsProject,
+        QgsRasterLayer,
+        QgsRectangle,
+        QgsSingleSymbolRenderer,
+        QgsTextBufferSettings,
+        QgsTextFormat,
+        QgsVectorLayer,
+        QgsVectorLayerSimpleLabeling,
+    )
+    from qgis.PyQt.QtCore import QSize
+    from qgis.PyQt.QtGui import QColor, QFont
+
+    basemap_labels = {
+        "topo": "USGS Topographic Basemap",
+        "osm": "OpenStreetMap Street Basemap",
+        "satellite": "World Satellite Imagery",
+    }
+    basemap_title = basemap_labels.get(config.basemap.strip().lower(), "Custom Basemap")
+    base_layer = QgsRasterLayer(config.active_basemap_url, basemap_title, "wms")
+    if not base_layer.isValid():
+        base_layer = QgsRasterLayer(config.fallback_basemap_url, "World Topographic Basemap", "wms")
+    if base_layer.isValid():
+        QgsProject.instance().addMapLayer(base_layer)
+        print(f"\nBasemap stream connected ({basemap_title}).", flush=True)
+
+    render_layers = []
+
+    # 1. Top candidate pins (numbered #1, #2, #3...)
+    pin_layer = QgsVectorLayer(
+        f"Point?crs={epsg_str}&field=Rank:integer&field=LabelText:string",
+        f"Top Rooftop Sites ({timestamp_str})",
+        "memory",
+    )
+    top_prov = pin_layer.dataProvider()
+    best_pin_layer = QgsVectorLayer(
+        f"Point?crs={epsg_str}&field=LabelText:string",
+        f"Best Rooftop #1 ({timestamp_str})",
+        "memory",
+    )
+    best_prov = best_pin_layer.dataProvider()
+
+    top_results = city_result.get("top_results", [])
+    for rank_idx, cand in enumerate(top_results, 1):
+        h_ft = cand.structure_height_m * 3.28084
+        lbl = f"#{rank_idx} {cand.name}\n({cand.structure_height_m:.0f}m / {h_ft:.0f}ft | {cand.f1_pct:.0f}% F1)"
+        feat = QgsFeature()
+        feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(cand.x, cand.y)))
+        if rank_idx == 1:
+            feat.setAttributes([lbl])
+            best_prov.addFeature(feat)
+        else:
+            feat.setAttributes([rank_idx, lbl])
+            top_prov.addFeature(feat)
+    best_pin_layer.updateExtents()
+    pin_layer.updateExtents()
+
+    _bold_weight = getattr(QFont, "Bold", QFont.Weight.Bold)
+    best_sym = QgsMarkerSymbol.createSimple({
+        "name": "star",
+        "color": "220,38,38,255",
+        "outline_color": "255,255,255,255",
+        "outline_width": "0.9",
+        "size": "6.5",
+    })
+    best_pin_layer.setRenderer(QgsSingleSymbolRenderer(best_sym))
+
+    pin_sym = QgsMarkerSymbol.createSimple({
+        "name": "circle",
+        "color": "37,99,235,245",
+        "outline_color": "255,255,255,255",
+        "outline_width": "0.8",
+        "size": "4.2",
+    })
+    pin_layer.setRenderer(QgsSingleSymbolRenderer(pin_sym))
+
+    for lyr, color_rgb, fsize, prio in [
+        (best_pin_layer, (140, 15, 15), 9, 10),
+        (pin_layer, (15, 35, 85), 8, 7),
+    ]:
+        tf = QgsTextFormat()
+        tf.setFont(QFont("DejaVu Sans", fsize, _bold_weight))
+        tf.setColor(QColor(*color_rgb))
+        buf = QgsTextBufferSettings()
+        buf.setEnabled(True)
+        buf.setSize(1.5)
+        buf.setColor(QColor(255, 255, 255))
+        tf.setBuffer(buf)
+        pal = QgsPalLayerSettings()
+        pal.fieldName = "LabelText"
+        pal.isExpression = False
+        pal.dist = 2.2
+        pal.priority = prio
+        pal.setFormat(tf)
+        lyr.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+        lyr.setLabelsEnabled(True)
+        QgsProject.instance().addMapLayer(lyr)
+        render_layers.append(lyr)
+
+    # 2. Study radius ring
+    cx, cy = city_result["center_loc"]["xy"]
+    rad = float(city_result["radius_m"])
+    ring_layer = QgsVectorLayer(f"LineString?crs={epsg_str}", f"Study Radius ({timestamp_str})", "memory")
+    ring_pts = [
+        QgsPointXY(cx + rad * math.cos(2.0 * math.pi * i / 120.0), cy + rad * math.sin(2.0 * math.pi * i / 120.0))
+        for i in range(121)
+    ]
+    f_ring = QgsFeature()
+    f_ring.setGeometry(QgsGeometry.fromPolylineXY(ring_pts))
+    ring_layer.dataProvider().addFeature(f_ring)
+    ring_layer.updateExtents()
+    ring_layer.setRenderer(
+        QgsSingleSymbolRenderer(
+            QgsLineSymbol.createSimple({"color": "30,64,175,180", "width": "0.9", "line_style": "dash"})
+        )
+    )
+    QgsProject.instance().addMapLayer(ring_layer)
+    render_layers.append(ring_layer)
+
+    # 3. Building footprints split into tall (>=15m) vs standard for visual contrast
+    if buildings:
+        tall_b_layer = QgsVectorLayer(f"Polygon?crs={epsg_str}", f"Tall Structures ({timestamp_str})", "memory")
+        std_b_layer = QgsVectorLayer(f"Polygon?crs={epsg_str}", f"Buildings ({timestamp_str})", "memory")
+        tall_feats, std_feats = [], []
+        for bfeat in buildings:
+            for ring in bfeat.polygons_utm:
+                if len(ring) < 3:
+                    continue
+                qpts = [QgsPointXY(px, py) for px, py in ring]
+                if qpts[0] != qpts[-1]:
+                    qpts.append(qpts[0])
+                fb = QgsFeature()
+                fb.setGeometry(QgsGeometry.fromPolygonXY([qpts]))
+                if bfeat.height_m >= config.min_building_height_m:
+                    tall_feats.append(fb)
+                else:
+                    std_feats.append(fb)
+        if tall_feats:
+            tall_b_layer.dataProvider().addFeatures(tall_feats)
+            tall_b_layer.updateExtents()
+            tall_b_layer.setRenderer(
+                QgsSingleSymbolRenderer(
+                    QgsFillSymbol.createSimple({
+                        "color": "30,41,59,185",
+                        "outline_color": "15,23,42,235",
+                        "outline_width": "0.35",
+                    })
+                )
+            )
+            QgsProject.instance().addMapLayer(tall_b_layer)
+            render_layers.append(tall_b_layer)
+        if std_feats:
+            std_b_layer.dataProvider().addFeatures(std_feats)
+            std_b_layer.updateExtents()
+            std_b_layer.setRenderer(
+                QgsSingleSymbolRenderer(
+                    QgsFillSymbol.createSimple({
+                        "color": "100,116,139,95",
+                        "outline_color": "71,85,105,140",
+                        "outline_width": "0.2",
+                    })
+                )
+            )
+            QgsProject.instance().addMapLayer(std_b_layer)
+            render_layers.append(std_b_layer)
+
+    # 4. Semi-transparent viewshed coverage heatmap (best #1 site)
+    tg = city_result["target_grid"]
+    cov_2d = city_result["top1_heatmap_2d"]
+    tmp_cov_path = os.path.join(tempfile.gettempdir(), f"lora_gis_cov_{timestamp_str}_{os.getpid()}.tif")
+    cov_layer = None
+    try:
+        if _write_coverage_rgba_geotiff(
+            cov_2d, tg["xmin"], tg["ymin"], tg["xmax"], tg["ymax"], wkid, tmp_cov_path
+        ):
+            cov_layer = QgsRasterLayer(tmp_cov_path, f"Top-1 Coverage Heatmap ({timestamp_str})")
+            if cov_layer.isValid():
+                QgsProject.instance().addMapLayer(cov_layer)
+                render_layers.append(cov_layer)
+
+        if base_layer.isValid():
+            render_layers.append(base_layer)
+
+        extent = QgsRectangle(cx - rad * 1.15, cy - rad * 1.15, cx + rad * 1.15, cy + rad * 1.15)
+        map_settings = QgsMapSettings()
+        map_settings.setDestinationCrs(crs_utm)
+        map_settings.setTransformContext(QgsProject.instance().transformContext())
+        map_settings.setLayers(render_layers)
+        map_settings.setExtent(extent)
+        map_settings.setOutputSize(QSize(config.map_width, config.map_height))
+        map_settings.setOutputDpi(config.map_dpi)
+
+        render_job = QgsMapRendererSequentialJob(map_settings)
+        render_job.start()
+        render_job.waitForFinished()
+        render_job.renderedImage().save(png_output_path, "PNG")
+        print(f"City Viewshed Coverage Map PNG exported to: {png_output_path}", flush=True)
+    finally:
+        if cov_layer is not None:
+            QgsProject.instance().removeMapLayer(cov_layer.id())
+        if os.path.exists(tmp_cov_path):
+            try:
+                os.remove(tmp_cov_path)
+            except OSError:
+                pass

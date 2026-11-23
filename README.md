@@ -172,6 +172,28 @@ python3 -m lora_gis \
   --basemap satellite
 ```
 
+### 6. City Rooftop Ranking & Viewshed Coverage (`--city`)
+
+In flat or urban areas, use `--city` to automatically rank the tallest buildings, water towers, and grain silos by what percentage of the city they can cover with clear Line-of-Sight and 60% 1st Fresnel Zone clearance, plus greedy 2-site and 3-site combination recommendations:
+
+```bash
+# Rank the top 10 rooftops/towers across a 3 km radius for 6 ft handheld receivers
+python3 -m lora_gis \
+  --city "Salina, KS" \
+  --radius 3km \
+  --top 10 \
+  --rx-height 6ft \
+  --mast-height 10ft
+
+# Use a local LiDAR DSM GeoTIFF with satellite imagery instead of OSM buildings
+python3 -m lora_gis \
+  --city salina=38.8403,-97.6114 \
+  --radius 2mi \
+  --dem-file salina_dsm_ft.tif \
+  --dem-units ft \
+  --basemap satellite
+```
+
 ### CLI Options Reference
 
 #### Topology & Locations
@@ -221,6 +243,18 @@ python3 -m lora_gis \
 | `--sample-step` | Sightline ray sample spacing in meters | `5.0` (DSM) / `25.0` (DEM) |
 | `--rooftop-margin` | Near-field exclusion radius around endpoints in DSM mode (`m` or `ft`) | `12m` (DSM) / `0m` (DEM) |
 | `--crs` | Explicit metric EPSG code (auto-detected UTM zone if omitted) | Auto UTM |
+
+#### City Viewshed Mode
+
+| Flag | Description | Default |
+| :--- | :--- | :--- |
+| `--city` | Center place or `name=lat,lon` for city rooftop ranking & viewshed coverage mode | None |
+| `--radius` | Study radius around `--city` (`km`, `mi`, `m`, or `ft`) | `3km` |
+| `--top` | Number of top-ranked rooftop structures shown in the report & map | `10` |
+| `--rx-height` | Target receiver antenna height AGL across the city (`ft` or `m`) | `6ft` (`1.83 m`) |
+| `--mast-height` | Antenna mast height above candidate rooftops (`ft` or `m`) | `10ft` (`3.05 m`) |
+| `--max-sites` | Maximum candidate structures evaluated before ranking `--top N` | `25` |
+| `--viewshed-grid` | Cartesian target grid samples per axis for viewshed scoring | `61` |
 
 #### Map & Output
 
