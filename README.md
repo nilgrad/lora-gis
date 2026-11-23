@@ -192,6 +192,10 @@ python3 -m lora_gis \
   --dem-file salina_dsm_ft.tif \
   --dem-units ft \
   --basemap satellite
+
+# Optional high-completeness backends (requires extras: pip install -e ".[overture]" or ".[lidar]")
+python3 -m lora_gis --city "Salina, KS" --radius 3km --buildings hybrid
+python3 -m lora_gis --city "Salina, KS" --radius 2km --lidar-ept --lidar-resolution 2.0
 ```
 
 ### CLI Options Reference
@@ -232,14 +236,17 @@ python3 -m lora_gis \
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
-| `--dem` | DEM preset (`usgs-3dep`, `ny-gis`) or ArcGIS ImageServer URL | `usgs-3dep` |
+| `--dem` | DEM preset (`usgs-3dep`, `usgs-3dep-dsm`, `ny-gis`) or ArcGIS ImageServer URL | `usgs-3dep` |
 | `--dem-file` | Local georeferenced GeoTIFF DEM/DSM file path | None |
 | `--dsm-file` | Optional separate local georeferenced DSM GeoTIFF (buildings/trees) overlaid for path obstructions | None |
 | `--dem-units` | Vertical elevation units of the DEM/DSM source (`m`, `ft`, `us-ft`) | `m` |
 | `--surface-mode` | Surface sampling mode: `dem` (bare-earth bilinear) or `dsm` (nearest-neighbor + dense urban sampling) | `dem` |
-| `--buildings` | Building & tall-structure overlay source (`none` or `osm` via Overpass API) | `none` |
-| `--default-building-height` | Fallback height for untagged OSM buildings (`m` or `ft`) | `6m` |
-| `--overpass-url` | Custom Overpass API interpreter URL for `--buildings osm` | Public Overpass mirrors |
+| `--buildings` | Building overlay source: `none`, `osm` (Overpass), `overture` (Overture GeoParquet), or `hybrid` (Overture + OSM names/towers) | `none` |
+| `--default-building-height` | Fallback height for untagged buildings (`m` or `ft`) | `6m` |
+| `--overpass-url` | Custom Overpass API interpreter URL for `--buildings osm` / `hybrid` | Public Overpass mirrors |
+| `--lidar-ept` | Stream 1–2 m USGS 3DEP LiDAR DSM (buildings + tree canopy) on the fly via optional PDAL backend | `False` |
+| `--lidar-resolution` | Target pixel resolution in meters for `--lidar-ept` DSM rasterization | `2.0` |
+| `--ept-url` | Explicit Entwine `ept.json` URL for `--lidar-ept` (skips USGS index lookup) | Auto from USGS index |
 | `--sample-step` | Sightline ray sample spacing in meters | `5.0` (DSM) / `25.0` (DEM) |
 | `--rooftop-margin` | Near-field exclusion radius around endpoints in DSM mode (`m` or `ft`) | `12m` (DSM) / `0m` (DEM) |
 | `--crs` | Explicit metric EPSG code (auto-detected UTM zone if omitted) | Auto UTM |

@@ -16,6 +16,20 @@ dependencies = [
     "numpy",
     "Pillow",
 ]
+
+[project.optional-dependencies]
+overture = [
+    "overturemaps>=0.9",
+    "shapely>=2.0",
+]
+lidar = [
+    "pdal>=3.0",
+]
+all = [
+    "overturemaps>=0.9",
+    "shapely>=2.0",
+    "pdal>=3.0",
+]
 keywords = ["lora", "meshcore", "meshtastic", "qgis", "pyqgis", "rf", "line-of-sight", "fresnel", "dem", "gis"]
 classifiers = [
     "Development Status :: 4 - Beta",

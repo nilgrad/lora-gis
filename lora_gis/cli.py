@@ -12,6 +12,8 @@ import numpy as np
 from .buildings import (
     BuildingFeature,
     fetch_osm_buildings,
+    fetch_overture_buildings,
+    merge_building_datasets,
     rasterize_buildings_onto_dem,
     select_tall_structure_candidates,
 )
@@ -19,6 +21,7 @@ from .cartography import render_candidate_profiles, render_city_viewshed_map, re
 from .config import LoRaGISConfig, normalize_loc_key, parse_distance_m, parse_height_value_m
 from .dem import DEMProvider
 from .geonames import parse_link_pair, resolve_location
+from .lidar import stream_3dep_lidar_dsm
 from .report import export_city_markdown_report, export_markdown_report
 from .rf import analyze_link, compute_link_padding
 from .utm import detect_utm_crs, parse_crs_wkid
@@ -158,7 +161,7 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
     elev_group.add_argument(
         "--dem",
         default=None,
-        help="DEM source preset ('usgs-3dep', 'ny-gis') or custom ArcGIS ImageServer URL",
+        help="DEM preset ('usgs-3dep', 'usgs-3dep-dsm', 'ny-gis') or custom ArcGIS ImageServer URL",
     )
     elev_group.add_argument(
         "--dem-file",
@@ -184,19 +187,36 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
     )
     elev_group.add_argument(
         "--buildings",
-        choices=["none", "osm"],
+        choices=["none", "osm", "overture", "hybrid"],
         default=None,
-        help="Building and tall-structure overlay source ('none' or 'osm' via Overpass API; default: 'none')",
+        help="Building overlay source: 'none', 'osm' (Overpass), 'overture' (Overture GeoParquet), or 'hybrid' (Overture + OSM names/towers)",
     )
     elev_group.add_argument(
         "--default-building-height",
         default=None,
-        help="Fallback height for untagged OSM buildings, e.g. '6m' or '20ft' (default: 6m)",
+        help="Fallback height for untagged buildings, e.g. '6m' or '20ft' (default: 6m)",
     )
     elev_group.add_argument(
         "--overpass-url",
         default=None,
-        help="Optional custom Overpass API interpreter URL for --buildings osm",
+        help="Optional custom Overpass API interpreter URL for --buildings osm/hybrid",
+    )
+    elev_group.add_argument(
+        "--lidar-ept",
+        action="store_true",
+        default=None,
+        help="Stream 1-2m USGS 3DEP LiDAR DSM (buildings + tree canopy) on the fly via optional PDAL backend",
+    )
+    elev_group.add_argument(
+        "--lidar-resolution",
+        type=float,
+        default=None,
+        help="Target pixel resolution in meters for --lidar-ept DSM rasterization (default: 2.0)",
+    )
+    elev_group.add_argument(
+        "--ept-url",
+        default=None,
+        help="Optional explicit Entwine ept.json URL for --lidar-ept (skips USGS index lookup)",
     )
     elev_group.add_argument(
         "--sample-step",
@@ -340,6 +360,13 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.default_building_height_m = parse_height_value_m(args.default_building_height)
     if args.overpass_url is not None:
         config.overpass_url = args.overpass_url
+    if args.lidar_ept:
+        config.lidar_ept = True
+    if args.lidar_resolution is not None:
+        config.lidar_resolution_m = max(0.5, float(args.lidar_resolution))
+    if args.ept_url is not None:
+        config.ept_url = args.ept_url
+        config.lidar_ept = True
     if args.auto_candidates is not None:
         config.auto_candidates = max(0, int(args.auto_candidates))
     if args.min_building_height is not None:
@@ -448,6 +475,79 @@ def _ensure_qgis_app():
     return headless_cli
 
 
+def _load_urban_layers(
+    config: LoRaGISConfig,
+    dem: DEMProvider,
+    utm_bounds: tuple,
+    wkid: int,
+    transform,
+    inv_transform,
+) -> List[BuildingFeature]:
+    """Loads optional USGS 3DEP LiDAR EPT DSM and/or building overlays (OSM, Overture, Hybrid)."""
+    from qgis.core import QgsPointXY
+
+    dem_xmin, dem_ymin, dem_xmax, dem_ymax = utm_bounds
+    sw_ll = inv_transform.transform(QgsPointXY(dem_xmin, dem_ymin))
+    ne_ll = inv_transform.transform(QgsPointXY(dem_xmax, dem_ymax))
+    bbox_wgs84 = (
+        min(sw_ll.y(), ne_ll.y()),
+        min(sw_ll.x(), ne_ll.x()),
+        max(sw_ll.y(), ne_ll.y()),
+        max(sw_ll.x(), ne_ll.x()),
+    )
+
+    if config.use_lidar_ept and not dem.has_separate_surface:
+        stream_3dep_lidar_dsm(
+            dem=dem,
+            bbox_wgs84=bbox_wgs84,
+            utm_bounds=utm_bounds,
+            wkid=wkid,
+            resolution_m=config.lidar_resolution_m,
+            ept_url=config.ept_url,
+        )
+
+    b_src = config.buildings_source.strip().lower()
+    if b_src == "none":
+        return []
+
+    def _proj_ll(lon_v: float, lat_v: float):
+        p = transform.transform(QgsPointXY(lon_v, lat_v))
+        return (float(p.x()), float(p.y()))
+
+    buildings_list: List[BuildingFeature] = []
+    if b_src == "osm":
+        buildings_list = fetch_osm_buildings(
+            bbox_wgs84=bbox_wgs84,
+            proj_fn=_proj_ll,
+            overpass_url=config.overpass_url,
+            default_building_height_m=config.default_building_height_m,
+        )
+    elif b_src == "overture":
+        buildings_list = fetch_overture_buildings(
+            bbox_wgs84=bbox_wgs84,
+            proj_fn=_proj_ll,
+            default_building_height_m=config.default_building_height_m,
+        )
+    elif b_src == "hybrid":
+        overture_list = fetch_overture_buildings(
+            bbox_wgs84=bbox_wgs84,
+            proj_fn=_proj_ll,
+            default_building_height_m=config.default_building_height_m,
+        )
+        osm_list = fetch_osm_buildings(
+            bbox_wgs84=bbox_wgs84,
+            proj_fn=_proj_ll,
+            overpass_url=config.overpass_url,
+            default_building_height_m=config.default_building_height_m,
+        )
+        buildings_list = merge_building_datasets(overture_list, osm_list)
+
+    if buildings_list and dem.cache is not None and not dem.has_separate_surface:
+        rasterize_buildings_onto_dem(dem, buildings_list, target_res_m=2.0, max_px=4000)
+
+    return buildings_list
+
+
 def _run_city_analysis(config: LoRaGISConfig) -> Dict:
     """Executes --city rooftop viewshed ranking, urban map rendering, and Markdown report export."""
     assert config.city_target is not None
@@ -463,7 +563,12 @@ def _run_city_analysis(config: LoRaGISConfig) -> Dict:
     # Smart urban defaults in --city mode unless overridden
     if not config.basemap_explicit:
         config.basemap = "osm"
-    if not config.buildings_explicit and config.dem_file is None and config.dsm_file is None:
+    if (
+        not config.buildings_explicit
+        and config.dem_file is None
+        and config.dsm_file is None
+        and not config.use_lidar_ept
+    ):
         config.buildings_source = "osm"
 
     headless_cli = _ensure_qgis_app()
@@ -526,29 +631,14 @@ def _run_city_analysis(config: LoRaGISConfig) -> Dict:
         )
         dem.load_raster(dem_xmin, dem_ymin, dem_xmax, dem_ymax, resolution_m=2.0, max_px=4000)
 
-        buildings_list: List[BuildingFeature] = []
-        if config.buildings_source.strip().lower() == "osm":
-            sw_ll = inv_transform.transform(QgsPointXY(dem_xmin, dem_ymin))
-            ne_ll = inv_transform.transform(QgsPointXY(dem_xmax, dem_ymax))
-            bbox_wgs84 = (
-                min(sw_ll.y(), ne_ll.y()),
-                min(sw_ll.x(), ne_ll.x()),
-                max(sw_ll.y(), ne_ll.y()),
-                max(sw_ll.x(), ne_ll.x()),
-            )
-
-            def _proj_ll(lon_v: float, lat_v: float):
-                p = transform.transform(QgsPointXY(lon_v, lat_v))
-                return (float(p.x()), float(p.y()))
-
-            buildings_list = fetch_osm_buildings(
-                bbox_wgs84=bbox_wgs84,
-                proj_fn=_proj_ll,
-                overpass_url=config.overpass_url,
-                default_building_height_m=config.default_building_height_m,
-            )
-            if buildings_list and dem.cache is not None and not dem.has_separate_surface:
-                rasterize_buildings_onto_dem(dem, buildings_list, target_res_m=2.0, max_px=4000)
+        buildings_list = _load_urban_layers(
+            config=config,
+            dem=dem,
+            utm_bounds=(dem_xmin, dem_ymin, dem_xmax, dem_ymax),
+            wkid=wkid,
+            transform=transform,
+            inv_transform=inv_transform,
+        )
 
         city_result = analyze_city_viewshed(
             center_loc=center_loc,
@@ -785,69 +875,54 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             max_px=4000 if config.is_dsm_mode else 2500,
         )
 
-        buildings_list: List[BuildingFeature] = []
-        if config.buildings_source.strip().lower() == "osm":
-            sw_ll = inv_transform.transform(QgsPointXY(dem_xmin, dem_ymin))
-            ne_ll = inv_transform.transform(QgsPointXY(dem_xmax, dem_ymax))
-            bbox_wgs84 = (
-                min(sw_ll.y(), ne_ll.y()),
-                min(sw_ll.x(), ne_ll.x()),
-                max(sw_ll.y(), ne_ll.y()),
-                max(sw_ll.x(), ne_ll.x()),
+        buildings_list = _load_urban_layers(
+            config=config,
+            dem=dem,
+            utm_bounds=(dem_xmin, dem_ymin, dem_xmax, dem_ymax),
+            wkid=wkid,
+            transform=transform,
+            inv_transform=inv_transform,
+        )
+
+        if buildings_list and config.auto_candidates > 0:
+            auto_selected = select_tall_structure_candidates(
+                buildings=buildings_list,
+                dem=dem,
+                count=config.auto_candidates,
+                min_height_m=config.min_building_height_m,
+                study_bbox=(dem_xmin, dem_ymin, dem_xmax, dem_ymax),
             )
-
-            def _proj_wgs84_to_utm(lon_val: float, lat_val: float):
-                pt = transform.transform(QgsPointXY(lon_val, lat_val))
-                return (float(pt.x()), float(pt.y()))
-
-            buildings_list = fetch_osm_buildings(
-                bbox_wgs84=bbox_wgs84,
-                proj_fn=_proj_wgs84_to_utm,
-                overpass_url=config.overpass_url,
-                default_building_height_m=config.default_building_height_m,
+            mast_h = (
+                config.candidate_height_m
+                if config.candidate_height_m is not None
+                else config.rooftop_mast_height_m
             )
-            if buildings_list and dem.cache is not None and not dem.has_separate_surface:
-                rasterize_buildings_onto_dem(dem, buildings_list, target_res_m=2.0, max_px=4000)
-
-            if buildings_list and config.auto_candidates > 0:
-                auto_selected = select_tall_structure_candidates(
-                    buildings=buildings_list,
-                    dem=dem,
-                    count=config.auto_candidates,
-                    min_height_m=config.min_building_height_m,
-                    study_bbox=(dem_xmin, dem_ymin, dem_xmax, dem_ymax),
+            for idx_b, bfeat in enumerate(auto_selected, 1):
+                base_key = normalize_loc_key(bfeat.name) or f"structure-{idx_b}"
+                cand_key = base_key
+                suffix = 2
+                while cand_key in config.locations:
+                    cand_key = f"{base_key}-{suffix}"
+                    suffix += 1
+                config.locations[cand_key] = {
+                    "name": bfeat.name,
+                    "lat": bfeat.lat,
+                    "lon": bfeat.lon,
+                    "x": bfeat.x,
+                    "y": bfeat.y,
+                    "xy": (bfeat.x, bfeat.y),
+                    "height_m": mast_h,
+                    "building_height_m": bfeat.height_m,
+                    "structure_type": bfeat.structure_type,
+                    "address": bfeat.address,
+                }
+                config.active_candidate_keys.append(cand_key)
+            if auto_selected:
+                print(
+                    f"Auto-selected {len(auto_selected)} tall structure(s) as candidate relays "
+                    f"(rooftop mast: {mast_h:.2f} m / {mast_h*3.28084:.0f} ft).",
+                    flush=True,
                 )
-                mast_h = (
-                    config.candidate_height_m
-                    if config.candidate_height_m is not None
-                    else config.rooftop_mast_height_m
-                )
-                for idx_b, bfeat in enumerate(auto_selected, 1):
-                    base_key = normalize_loc_key(bfeat.name) or f"structure-{idx_b}"
-                    cand_key = base_key
-                    suffix = 2
-                    while cand_key in config.locations:
-                        cand_key = f"{base_key}-{suffix}"
-                        suffix += 1
-                    config.locations[cand_key] = {
-                        "name": bfeat.name,
-                        "lat": bfeat.lat,
-                        "lon": bfeat.lon,
-                        "x": bfeat.x,
-                        "y": bfeat.y,
-                        "xy": (bfeat.x, bfeat.y),
-                        "height_m": mast_h,
-                        "building_height_m": bfeat.height_m,
-                        "structure_type": bfeat.structure_type,
-                        "address": bfeat.address,
-                    }
-                    config.active_candidate_keys.append(cand_key)
-                if auto_selected:
-                    print(
-                        f"Auto-selected {len(auto_selected)} tall OSM structure(s) as candidate relays "
-                        f"(rooftop mast: {mast_h:.2f} m / {mast_h*3.28084:.0f} ft).",
-                        flush=True,
-                    )
 
         link_results = []
         all_viable_relays = set()

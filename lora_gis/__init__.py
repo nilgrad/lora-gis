@@ -3,7 +3,10 @@
 from .buildings import (
     BuildingFeature,
     fetch_osm_buildings,
+    fetch_overture_buildings,
+    merge_building_datasets,
     parse_osm_height_m,
+    parse_overture_records,
     rasterize_buildings_onto_dem,
     select_tall_structure_candidates,
 )
@@ -19,6 +22,11 @@ from .config import (
 )
 from .dem import DEMProvider
 from .geonames import lookup_geonames_place, resolve_location
+from .lidar import (
+    build_pdal_dsm_pipeline,
+    match_ept_resources_for_bbox,
+    stream_3dep_lidar_dsm,
+)
 from .utm import detect_utm_crs
 from .viewshed import (
     CityCandidateResult,
@@ -39,19 +47,25 @@ __all__ = [
     "LoRaGISConfig",
     "analyze_city_viewshed",
     "apply_cli_args",
+    "build_pdal_dsm_pipeline",
     "detect_utm_crs",
     "evaluate_candidate_viewshed",
     "extract_dsm_peak_candidates",
     "fetch_osm_buildings",
+    "fetch_overture_buildings",
     "lookup_geonames_place",
     "main",
+    "match_ept_resources_for_bbox",
+    "merge_building_datasets",
     "normalize_loc_key",
     "optimize_site_combinations",
     "parse_distance_m",
     "parse_height_value_m",
     "parse_osm_height_m",
+    "parse_overture_records",
     "rasterize_buildings_onto_dem",
     "resolve_location",
     "run_analysis",
     "select_tall_structure_candidates",
+    "stream_3dep_lidar_dsm",
 ]
