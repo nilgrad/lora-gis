@@ -1,0 +1,34 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      MPLBACKEND: Agg
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install QGIS, GDAL, and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qgis-common \
+            qgis-providers \
+            python3-qgis \
+            python3-pyqt5 \
+            python3-numpy \
+            python3-pil \
+            python3-matplotlib \
+            python3-gdal
+
+      - name: Run unit test suite
+        run: python3 -m unittest discover -s tests -v
