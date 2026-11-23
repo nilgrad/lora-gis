@@ -38,14 +38,22 @@ def export_markdown_report(
     freq_label = f"{config.freq_mhz:.0f}" if config.freq_mhz.is_integer() else f"{config.freq_mhz:.1f}"
     relay_ft = config.relay_height_m * 3.28084
 
+    surface_kind = "USGS 3DEP LiDAR EPT DSM" if config.use_lidar_ept else "DSM"
     surface_desc = (
-        f"DSM (nearest-neighbor, `{config.effective_sample_step_m:.1f} m` ray step, "
+        f"{surface_kind} (nearest-neighbor, `{config.effective_sample_step_m:.1f} m` ray step, "
         f"`{config.effective_rooftop_margin_m:.1f} m` rooftop margin)"
         if config.is_dsm_mode
         else "Bare-earth DEM (bilinear interpolation)"
     )
     if config.dem_units.strip().lower() not in ("m", "meter", "meters"):
         surface_desc += f", input units `{config.dem_units}`"
+
+    b_src_labels = {
+        "osm": "OpenStreetMap",
+        "overture": "Overture Maps",
+        "hybrid": "Overture Maps + OpenStreetMap",
+    }
+    b_src_label = b_src_labels.get(config.buildings_source.strip().lower(), "Building Overlay")
 
     md_lines = [
         f"# {config.title} {freq_label} MHz LoRa (MeshCore) Relay Report — {route_names} ({timestamp_str})",
@@ -66,7 +74,7 @@ def export_markdown_report(
         tall_cnt = sum(1 for b in buildings if b.height_m >= 15.0)
         max_bh = max((b.height_m for b in buildings), default=0.0)
         md_lines.append(
-            f"| **Building Overlay** | OpenStreetMap (`{len(buildings):,}` structures, "
+            f"| **Building Overlay** | {b_src_label} (`{len(buildings):,}` structures, "
             f"`{tall_cnt}` >= 15 m, max height `{max_bh:.1f} m` / `{max_bh*3.28084:.0f} ft`) |"
         )
 
@@ -433,6 +441,14 @@ def export_city_markdown_report(
     f1_pct_target = int(round(config.min_fresnel_clearance * 100))
     tg = city_result["target_grid"]
 
+    surface_kind = "USGS 3DEP LiDAR EPT DSM" if config.use_lidar_ept else "DSM"
+    b_src_labels = {
+        "osm": "OpenStreetMap",
+        "overture": "Overture Maps",
+        "hybrid": "Overture Maps + OpenStreetMap",
+    }
+    b_src_label = b_src_labels.get(config.buildings_source.strip().lower(), "Building Overlay")
+
     md_lines = [
         f"# {config.title} {freq_label} MHz City Viewshed & Rooftop Ranking: {center['name']} ({timestamp_str})",
         "",
@@ -448,7 +464,7 @@ def export_city_markdown_report(
         f"| **Target Fresnel Clearance** | `>= {f1_pct_target}%` of 1st Fresnel Zone ($F_1$), $K = 4/3$ Earth Curvature |",
         f"| **Rooftop Mast Height** | `{config.city_mast_height_m:.2f} m` (`{config.city_mast_height_m*3.28084:.1f} ft`) above structure |",
         f"| **Target Receiver Height** | `{config.city_rx_height_m:.2f} m` (`{config.city_rx_height_m*3.28084:.1f} ft`) AGL |",
-        f"| **Surface Sampling** | DSM nearest-neighbor (`{config.effective_sample_step_m:.1f} m` ray step, `{config.effective_rooftop_margin_m:.1f} m` rooftop margin) |",
+        f"| **Surface Sampling** | {surface_kind} nearest-neighbor (`{config.effective_sample_step_m:.1f} m` ray step, `{config.effective_rooftop_margin_m:.1f} m` rooftop margin) |",
         f"| **Candidates Evaluated** | `{len(city_result['all_results'])}` structures (showing top `{len(city_result['top_results'])}`) |",
     ]
 
@@ -456,7 +472,7 @@ def export_city_markdown_report(
         tall_cnt = sum(1 for b in buildings if b.height_m >= config.min_building_height_m)
         max_bh = max((b.height_m for b in buildings), default=0.0)
         md_lines.append(
-            f"| **Building Overlay** | OpenStreetMap (`{len(buildings):,}` structures, "
+            f"| **Building Overlay** | {b_src_label} (`{len(buildings):,}` structures, "
             f"`{tall_cnt}` >= {config.min_building_height_m:.0f} m, max `{max_bh:.1f} m` / `{max_bh*3.28084:.0f} ft`) |"
         )
     md_lines.append("")

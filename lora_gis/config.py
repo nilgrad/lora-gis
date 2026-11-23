@@ -139,14 +139,17 @@ class LoRaGISConfig:
     map_extent_scale: float = 1.45
 
     # GIS & DEM settings
-    dem_source: str = "usgs-3dep"             # Preset key ('usgs-3dep', 'ny-gis') or custom URL
+    dem_source: str = "usgs-3dep"             # Preset key ('usgs-3dep', 'usgs-3dep-dsm', 'ny-gis') or custom URL
     dem_file: Optional[str] = None            # Optional local GeoTIFF path (bare-earth DEM or DSM)
     dsm_file: Optional[str] = None            # Optional separate local DSM GeoTIFF (buildings/trees)
     dem_units: str = "m"                      # Vertical elevation units ('m', 'ft', 'us-ft')
     surface_mode: str = "dem"                 # 'dem' (bare-earth bilinear) or 'dsm' (nearest + urban sampling)
-    buildings_source: str = "none"            # Building overlay source ('none' or 'osm')
-    default_building_height_m: float = 6.0    # Fallback height (m) for untagged OSM buildings
+    buildings_source: str = "none"            # Building overlay source ('none', 'osm', 'overture', 'hybrid')
+    default_building_height_m: float = 6.0    # Fallback height (m) for untagged buildings
     overpass_url: Optional[str] = None        # Optional custom Overpass API endpoint
+    lidar_ept: bool = False                   # Stream 1-2m USGS 3DEP LiDAR DSM via optional PDAL backend
+    lidar_resolution_m: float = 2.0           # Target resolution (m/px) for streamed LiDAR EPT DSM
+    ept_url: Optional[str] = None             # Optional explicit EPT ept.json URL
     auto_candidates: int = 0                  # Auto-evaluate top N tall buildings/towers as candidates
     min_building_height_m: float = 15.0       # Minimum structure height (m) for --auto-candidates
     rooftop_mast_height_m: float = 3.05       # Default mast height (~10 ft) on auto-selected rooftops
@@ -180,7 +183,13 @@ class LoRaGISConfig:
 
     @property
     def image_server_base(self) -> str:
+        if self.dem_source.strip().lower() == "usgs-3dep-dsm":
+            return DEM_PRESETS["usgs-3dep"]
         return DEM_PRESETS.get(self.dem_source, self.dem_source)
+
+    @property
+    def use_lidar_ept(self) -> bool:
+        return bool(self.lidar_ept) or self.dem_source.strip().lower() == "usgs-3dep-dsm"
 
     @property
     def dem_unit_scale(self) -> float:
@@ -195,6 +204,7 @@ class LoRaGISConfig:
         return (
             self.surface_mode.strip().lower() == "dsm"
             or self.dsm_file is not None
+            or self.use_lidar_ept
             or self.buildings_source.strip().lower() != "none"
             or self.city_target is not None
         )
@@ -261,6 +271,12 @@ class LoRaGISConfig:
             self.default_building_height_m = float(data["default_building_height_m"])
         if "overpass_url" in data:
             self.overpass_url = str(data["overpass_url"])
+        if "lidar_ept" in data:
+            self.lidar_ept = bool(data["lidar_ept"])
+        if "lidar_resolution_m" in data:
+            self.lidar_resolution_m = float(data["lidar_resolution_m"])
+        if "ept_url" in data:
+            self.ept_url = str(data["ept_url"])
         if "auto_candidates" in data:
             self.auto_candidates = int(data["auto_candidates"])
         if "min_building_height" in data:

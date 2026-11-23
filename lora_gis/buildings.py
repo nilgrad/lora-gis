@@ -479,3 +479,274 @@ def select_tall_structure_candidates(
             break
 
     return selected
+
+
+def _wkb_to_outer_rings_ll(wkb_bytes: bytes) -> List[List[Tuple[float, float]]]:
+    """Decodes WKB Polygon/MultiPolygon bytes into exterior (lon, lat) rings via shapely or GDAL OGR."""
+    if not wkb_bytes:
+        return []
+    try:
+        from shapely import wkb as shapely_wkb
+
+        geom = shapely_wkb.loads(wkb_bytes)
+        if geom.is_empty:
+            return []
+        if geom.geom_type == "Polygon":
+            return [[(float(x), float(y)) for x, y in geom.exterior.coords]]
+        if geom.geom_type == "MultiPolygon":
+            return [[(float(x), float(y)) for x, y in poly.exterior.coords] for poly in geom.geoms if not poly.is_empty]
+        return []
+    except ImportError:
+        pass
+
+    try:
+        from osgeo import ogr
+
+        geom = ogr.CreateGeometryFromWkb(bytes(wkb_bytes))
+        if geom is None:
+            return []
+        gtype = geom.GetGeometryName().upper()
+        rings: List[List[Tuple[float, float]]] = []
+        if gtype == "POLYGON":
+            if geom.GetGeometryCount() > 0:
+                ring = geom.GetGeometryRef(0)
+                rings.append([(float(ring.GetX(i)), float(ring.GetY(i))) for i in range(ring.GetPointCount())])
+        elif gtype == "MULTIPOLYGON":
+            for p_idx in range(geom.GetGeometryCount()):
+                poly = geom.GetGeometryRef(p_idx)
+                if poly is not None and poly.GetGeometryCount() > 0:
+                    ring = poly.GetGeometryRef(0)
+                    rings.append([(float(ring.GetX(i)), float(ring.GetY(i))) for i in range(ring.GetPointCount())])
+        return rings
+    except ImportError:
+        return []
+
+
+def parse_overture_records(
+    records: Sequence[Dict],
+    proj_fn: Callable[[float, float], Tuple[float, float]],
+    default_building_height_m: float = 6.0,
+    meters_per_level: float = 3.5,
+) -> List[BuildingFeature]:
+    """
+    Converts Overture Maps `building` theme row dicts (from GeoParquet / PyArrow)
+    into projected `BuildingFeature` objects.
+    """
+    features: List[BuildingFeature] = []
+    seen_ids = set()
+
+    for idx, row in enumerate(records):
+        raw_id = row.get("id") or f"row-{idx}"
+        oid = f"overture/{raw_id}"
+        if oid in seen_ids:
+            continue
+
+        rings_ll: List[List[Tuple[float, float]]] = []
+        raw_geom = row.get("geometry")
+        if isinstance(raw_geom, (bytes, bytearray, memoryview)):
+            rings_ll = _wkb_to_outer_rings_ll(bytes(raw_geom))
+        elif isinstance(raw_geom, dict):
+            gtype = raw_geom.get("type")
+            coords = raw_geom.get("coordinates") or []
+            if gtype == "Polygon" and coords:
+                rings_ll = [[(float(p[0]), float(p[1])) for p in coords[0]]]
+            elif gtype == "MultiPolygon" and coords:
+                rings_ll = [[(float(p[0]), float(p[1])) for p in poly[0]] for poly in coords if poly]
+        elif isinstance(raw_geom, (list, tuple)) and raw_geom:
+            if isinstance(raw_geom[0], (list, tuple)) and len(raw_geom[0]) >= 2 and isinstance(raw_geom[0][0], (int, float)):
+                rings_ll = [[(float(p[0]), float(p[1])) for p in raw_geom]]
+
+        rings_ll = [r for r in rings_ll if len(r) >= 3]
+        if not rings_ll:
+            continue
+
+        polygons_utm = [[proj_fn(lon, lat) for lon, lat in ring] for ring in rings_ll]
+        lon_c, lat_c = _ring_centroid(rings_ll[0])
+        ux, uy = _ring_centroid(polygons_utm[0])
+
+        # Height extraction: explicit Overture height -> num_floors -> subtype/class default -> fallback
+        raw_h = row.get("height")
+        raw_floors = row.get("num_floors")
+        raw_roof_h = row.get("roof_height")
+        subtype = str(row.get("class") or row.get("subtype") or "building").strip().lower()
+        if subtype in ("", "none", "null"):
+            subtype = "building"
+
+        height_m: Optional[float] = None
+        height_source = "default"
+        if raw_h is not None:
+            try:
+                hv = float(raw_h)
+                if np.isfinite(hv) and 0.5 <= hv <= 1000.0:
+                    height_m = hv
+                    height_source = "overture_height"
+            except (TypeError, ValueError):
+                pass
+
+        if height_m is None and raw_floors is not None:
+            try:
+                fv = float(raw_floors)
+                if np.isfinite(fv) and 0.5 <= fv <= 200.0:
+                    roof_add = 0.0
+                    if raw_roof_h is not None:
+                        try:
+                            rv = float(raw_roof_h)
+                            if np.isfinite(rv) and 0.0 < rv <= 30.0:
+                                roof_add = rv
+                        except (TypeError, ValueError):
+                            pass
+                    height_m = fv * meters_per_level + roof_add
+                    height_source = "levels"
+            except (TypeError, ValueError):
+                pass
+
+        if height_m is None:
+            if subtype in BUILDING_SUBTYPE_DEFAULT_HEIGHTS_M:
+                height_m = BUILDING_SUBTYPE_DEFAULT_HEIGHTS_M[subtype]
+                height_source = "type_default"
+            else:
+                height_m = float(default_building_height_m)
+                height_source = "default"
+
+        names_field = row.get("names")
+        primary_name = ""
+        if isinstance(names_field, dict):
+            primary_name = str(names_field.get("primary") or "").strip()
+        elif isinstance(names_field, str):
+            primary_name = names_field.strip()
+        elif row.get("name"):
+            primary_name = str(row.get("name")).strip()
+
+        display_name = primary_name if primary_name else f"{_format_structure_label(subtype)} ({raw_id[:8]})"
+        seen_ids.add(oid)
+        features.append(
+            BuildingFeature(
+                osm_id=oid,
+                name=display_name,
+                structure_type=subtype,
+                lat=float(lat_c),
+                lon=float(lon_c),
+                x=float(ux),
+                y=float(uy),
+                height_m=float(height_m),
+                height_source=height_source,
+                polygons_utm=polygons_utm,
+                address=None,
+            )
+        )
+
+    return features
+
+
+def fetch_overture_buildings(
+    bbox_wgs84: Tuple[float, float, float, float],
+    proj_fn: Callable[[float, float], Tuple[float, float]],
+    default_building_height_m: float = 6.0,
+) -> List[BuildingFeature]:
+    """
+    Streams Overture Maps building footprints and ML-derived heights from cloud
+    GeoParquet via the optional `overturemaps` Python client.
+    """
+    try:
+        from overturemaps import record_batch_reader
+    except ImportError as exc:
+        raise RuntimeError(
+            "Overture Maps building backend requires the optional 'overturemaps' package. "
+            "Install with: pip install \"lora-gis[overture]\" (or pip install overturemaps shapely)."
+        ) from exc
+
+    south, west, north, east = bbox_wgs84
+    print(
+        f"Querying Overture Maps GeoParquet buildings for bbox ({west:.4f},{south:.4f},{east:.4f},{north:.4f})...",
+        flush=True,
+    )
+    reader = record_batch_reader("building", bbox=(west, south, east, north))
+    if reader is None:
+        return []
+    table = reader.read_all()
+    cols = [c for c in ("id", "geometry", "height", "num_floors", "roof_height", "subtype", "class", "names") if c in table.column_names]
+    records = table.select(cols).to_pylist()
+    features = parse_overture_records(
+        records,
+        proj_fn=proj_fn,
+        default_building_height_m=default_building_height_m,
+    )
+    tall_count = sum(1 for f in features if f.height_m >= 15.0)
+    max_h = max((f.height_m for f in features), default=0.0)
+    print(
+        f"Loaded {len(features)} Overture buildings ({tall_count} >= 15m, max height {max_h:.1f}m).",
+        flush=True,
+    )
+    return features
+
+
+def merge_building_datasets(
+    overture_buildings: Sequence[BuildingFeature],
+    osm_buildings: Sequence[BuildingFeature],
+    match_radius_m: float = 25.0,
+) -> List[BuildingFeature]:
+    """
+    Merges Overture Maps buildings with OpenStreetMap buildings and tall `man_made`
+    structures: enriches matching Overture footprints with OSM names, street addresses,
+    and explicit height tags, and appends unmatched OSM tall structures (water towers,
+    grain silos, radio towers).
+    """
+    merged: List[BuildingFeature] = []
+    matched_osm_ids = set()
+
+    osm_xs = np.array([b.x for b in osm_buildings], dtype=np.float64) if osm_buildings else np.empty(0)
+    osm_ys = np.array([b.y for b in osm_buildings], dtype=np.float64) if osm_buildings else np.empty(0)
+
+    for ob in overture_buildings:
+        best_osm: Optional[BuildingFeature] = None
+        if len(osm_buildings) > 0:
+            dists = np.hypot(osm_xs - ob.x, osm_ys - ob.y)
+            min_idx = int(np.argmin(dists))
+            if float(dists[min_idx]) <= match_radius_m:
+                best_osm = osm_buildings[min_idx]
+                matched_osm_ids.add(best_osm.osm_id)
+
+        if best_osm is None:
+            merged.append(ob)
+            continue
+
+        # Prefer explicit OSM name/address when Overture lacks a real name
+        ob_is_generic = "(" in ob.name and ob.name.endswith(")")
+        osm_is_generic = "(" in best_osm.name and best_osm.name.endswith(")")
+        name = best_osm.name if (ob_is_generic and not osm_is_generic) else ob.name
+        address = ob.address or best_osm.address
+
+        # Keep explicit height tags over fallback heuristics
+        if best_osm.height_source == "height" and ob.height_source != "overture_height":
+            height_m, h_src = best_osm.height_m, best_osm.height_source
+        elif ob.height_source in ("overture_height", "levels"):
+            height_m, h_src = ob.height_m, ob.height_source
+        elif best_osm.height_source in ("height", "levels", "type_default"):
+            height_m, h_src = best_osm.height_m, best_osm.height_source
+        else:
+            height_m, h_src = max(ob.height_m, best_osm.height_m), ob.height_source
+
+        merged.append(
+            BuildingFeature(
+                osm_id=ob.osm_id,
+                name=name,
+                structure_type=best_osm.structure_type if best_osm.structure_type in TALL_MAN_MADE_TYPES else ob.structure_type,
+                lat=ob.lat,
+                lon=ob.lon,
+                x=ob.x,
+                y=ob.y,
+                height_m=height_m,
+                height_source=h_src,
+                polygons_utm=ob.polygons_utm,
+                address=address,
+            )
+        )
+
+    # Append unmatched OSM tall man-made structures (water towers, silos, towers) and named tall buildings
+    for osm_b in osm_buildings:
+        if osm_b.osm_id in matched_osm_ids:
+            continue
+        if osm_b.structure_type in TALL_MAN_MADE_TYPES or osm_b.height_m >= 15.0:
+            merged.append(osm_b)
+
+    return merged
