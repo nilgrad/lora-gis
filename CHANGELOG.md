@@ -2,6 +2,19 @@
 
 All notable changes to `lora-gis` are documented in this file.
 
+## [1.1.1] - 2026-11-23
+
+### Changed
+- **Candidate Sightline & Label Cartography**:
+  - Rendered clear explicit candidate legs as green dashed sightlines alongside green diamond markers displaying 1-hop, 2-hop, or clear-leg status on `map.png`.
+  - Disabled partial edge-clipped labels (`UsePartialCandidates = False`) and prioritized explicit candidate labels so callouts stay inside the map frame without clipping.
+- **Updated Sample Output**:
+  - Replaced the sample output with `examples/roscoe-livingston-manor-liberty/` (`Roscoe ↔ Livingston Manor ↔ Liberty`) evaluating three spaced-out candidate relays (`Shandelee Ridge`, `Ferndale Ridge`, `Willowemoc Ridge`) with `map.png`, `candidate_profiles.png`, `report.md`, and updated `README.md` documentation.
+
+### Fixed
+- **Duplicate Candidate Markers on Shared Hub Legs**: Deduplicated undirected `(endpoint, candidate)` sightlines and worst-blockage `✕` markers across multi-leg routes sharing an intermediate hub node.
+- **ArcGIS DEM Sample Ordering**: Indexed `getSamples` responses by `locationId` in `DEMProvider.fetch_elevations` so out-of-order multi-raster responses do not shift summit elevations.
+
 ## [1.1.0] - 2026-11-19
 
 ### Added
