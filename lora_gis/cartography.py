@@ -216,6 +216,7 @@ def render_topographic_map(
         cb_prov = cand_blockage_layer.dataProvider()
 
         cand_eval_by_key: Dict[str, List[Dict]] = {k: [] for k in candidate_keys}
+        seen_cand_segments = set()
         for res in link_results:
             u_xy = res["u_loc"]["xy"]
             v_xy = res["v_loc"]["xy"]
@@ -227,6 +228,12 @@ def render_topographic_map(
                     (u_xy, c_xy, ec["leg1"]),
                     (c_xy, v_xy, ec["leg2"]),
                 ]:
+                    seg_a = (round(start_xy[0], 1), round(start_xy[1], 1))
+                    seg_b = (round(end_xy[0], 1), round(end_xy[1], 1))
+                    seg_key = (seg_a, seg_b) if seg_a <= seg_b else (seg_b, seg_a)
+                    if seg_key in seen_cand_segments:
+                        continue
+                    seen_cand_segments.add(seg_key)
                     f_sl = QgsFeature()
                     f_sl.setGeometry(
                         QgsGeometry.fromPolylineXY([QgsPointXY(*start_xy), QgsPointXY(*end_xy)])
