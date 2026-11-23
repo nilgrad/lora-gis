@@ -12,6 +12,20 @@ DEM_PRESETS = {
     "ny-gis": "https://elevation.its.ny.gov/arcgis/rest/services/Latest_DEM/ImageServer",
 }
 
+FEET_TO_METERS = 0.3048
+US_SURVEY_FEET_TO_METERS = 1200.0 / 3937.0
+
+DEM_UNIT_SCALES = {
+    "m": 1.0,
+    "meter": 1.0,
+    "meters": 1.0,
+    "ft": FEET_TO_METERS,
+    "foot": FEET_TO_METERS,
+    "feet": FEET_TO_METERS,
+    "us-ft": US_SURVEY_FEET_TO_METERS,
+    "us_ft": US_SURVEY_FEET_TO_METERS,
+}
+
 DEFAULT_GEONAMES_URL = "https://carto.nationalmap.gov/arcgis/rest/services/geonames/MapServer"
 DEFAULT_TOPO_BASEMAP_URL = (
     "type=xyz&url=https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}&zmax=16&zmin=0"
@@ -19,6 +33,18 @@ DEFAULT_TOPO_BASEMAP_URL = (
 DEFAULT_FALLBACK_BASEMAP_URL = (
     "type=xyz&url=https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}&zmax=19&zmin=0"
 )
+DEFAULT_OSM_BASEMAP_URL = (
+    "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png&zmax=19&zmin=0"
+)
+DEFAULT_SATELLITE_BASEMAP_URL = (
+    "type=xyz&url=https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}&zmax=19&zmin=0"
+)
+
+BASEMAP_PRESETS = {
+    "topo": DEFAULT_TOPO_BASEMAP_URL,
+    "osm": DEFAULT_OSM_BASEMAP_URL,
+    "satellite": DEFAULT_SATELLITE_BASEMAP_URL,
+}
 
 HEIGHT_SENSITIVITY_SCENARIOS = [
     ("30 ft (9.14 m)", 9.14),
@@ -94,9 +120,15 @@ class LoRaGISConfig:
 
     # GIS & DEM settings
     dem_source: str = "usgs-3dep"             # Preset key ('usgs-3dep', 'ny-gis') or custom URL
-    dem_file: Optional[str] = None            # Optional local GeoTIFF path
+    dem_file: Optional[str] = None            # Optional local GeoTIFF path (bare-earth DEM or DSM)
+    dsm_file: Optional[str] = None            # Optional separate local DSM GeoTIFF (buildings/trees)
+    dem_units: str = "m"                      # Vertical elevation units ('m', 'ft', 'us-ft')
+    surface_mode: str = "dem"                 # 'dem' (bare-earth bilinear) or 'dsm' (nearest + urban sampling)
+    sample_step_m: Optional[float] = None     # Optional override for ray sample spacing (m)
+    rooftop_margin_m: Optional[float] = None  # Near-field endpoint exclusion margin in DSM mode (m)
     crs_epsg: Optional[str] = None            # Auto-detected UTM zone if None
     geonames_url: str = DEFAULT_GEONAMES_URL
+    basemap: str = "topo"                     # Preset ('topo', 'osm', 'satellite') or custom QGIS URI
     topo_basemap_url: str = DEFAULT_TOPO_BASEMAP_URL
     fallback_basemap_url: str = DEFAULT_FALLBACK_BASEMAP_URL
 
@@ -112,6 +144,37 @@ class LoRaGISConfig:
     @property
     def image_server_base(self) -> str:
         return DEM_PRESETS.get(self.dem_source, self.dem_source)
+
+    @property
+    def dem_unit_scale(self) -> float:
+        key = self.dem_units.strip().lower()
+        if key not in DEM_UNIT_SCALES:
+            valid = ", ".join(sorted({"m", "ft", "us-ft"}))
+            raise ValueError(f"Unsupported dem_units '{self.dem_units}'. Expected one of: {valid}.")
+        return DEM_UNIT_SCALES[key]
+
+    @property
+    def is_dsm_mode(self) -> bool:
+        return self.surface_mode.strip().lower() == "dsm" or self.dsm_file is not None
+
+    @property
+    def effective_sample_step_m(self) -> float:
+        if self.sample_step_m is not None:
+            return max(0.5, float(self.sample_step_m))
+        return 5.0 if self.is_dsm_mode else 25.0
+
+    @property
+    def effective_rooftop_margin_m(self) -> float:
+        if self.rooftop_margin_m is not None:
+            return max(0.0, float(self.rooftop_margin_m))
+        return 12.0 if self.is_dsm_mode else 0.0
+
+    @property
+    def active_basemap_url(self) -> str:
+        key = self.basemap.strip().lower()
+        if key == "topo" and self.topo_basemap_url != DEFAULT_TOPO_BASEMAP_URL:
+            return self.topo_basemap_url
+        return BASEMAP_PRESETS.get(key, self.basemap)
 
     def load_json_config(self, path: str) -> None:
         """Merges settings and locations from a JSON configuration file."""
@@ -138,6 +201,24 @@ class LoRaGISConfig:
             self.dem_source = str(data["dem_source"])
         if "dem_file" in data:
             self.dem_file = str(data["dem_file"])
+        if "dsm_file" in data:
+            self.dsm_file = str(data["dsm_file"])
+        if "dem_units" in data:
+            self.dem_units = str(data["dem_units"])
+        if "surface_mode" in data:
+            self.surface_mode = str(data["surface_mode"])
+        if "sample_step_m" in data:
+            self.sample_step_m = float(data["sample_step_m"])
+        if "rooftop_margin" in data:
+            self.rooftop_margin_m = parse_height_value_m(data["rooftop_margin"])
+        elif "rooftop_margin_m" in data:
+            self.rooftop_margin_m = float(data["rooftop_margin_m"])
+        if "basemap" in data:
+            self.basemap = str(data["basemap"])
+        if "initial_grid_step_m" in data:
+            self.initial_grid_step_m = float(data["initial_grid_step_m"])
+        if "min_grid_step_m" in data:
+            self.min_grid_step_m = float(data["min_grid_step_m"])
         if "crs_epsg" in data:
             self.crs_epsg = str(data["crs_epsg"])
         if "output_dir" in data:

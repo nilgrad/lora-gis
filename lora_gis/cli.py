@@ -117,7 +117,40 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
     parser.add_argument(
         "--dem-file",
         default=None,
-        help="Local GeoTIFF DEM file path for offline or custom regional elevation data",
+        help="Local georeferenced GeoTIFF DEM/DSM file path for offline or regional elevation data",
+    )
+    parser.add_argument(
+        "--dsm-file",
+        default=None,
+        help="Optional local georeferenced DSM GeoTIFF (buildings/trees) overlaid for path obstructions",
+    )
+    parser.add_argument(
+        "--dem-units",
+        choices=["m", "ft", "us-ft"],
+        default=None,
+        help="Vertical elevation units of the DEM/DSM source ('m', 'ft', or 'us-ft'; default: 'm')",
+    )
+    parser.add_argument(
+        "--surface-mode",
+        choices=["dem", "dsm"],
+        default=None,
+        help="Elevation surface sampling mode: 'dem' (bare-earth bilinear) or 'dsm' (nearest-neighbor + dense urban sampling)",
+    )
+    parser.add_argument(
+        "--sample-step",
+        type=float,
+        default=None,
+        help="Sightline ray sample spacing in meters (default: 5m in DSM mode, 25m in DEM mode)",
+    )
+    parser.add_argument(
+        "--rooftop-margin",
+        default=None,
+        help="Near-field exclusion radius around endpoints in DSM mode, e.g. '12m' or '40ft' (default: 12m in DSM mode)",
+    )
+    parser.add_argument(
+        "--basemap",
+        default=None,
+        help="Map backdrop preset ('topo', 'osm', 'satellite') or custom QGIS XYZ/WMS URI (default: 'topo')",
     )
     parser.add_argument(
         "--crs",
@@ -191,6 +224,18 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.dem_source = args.dem
     if args.dem_file is not None:
         config.dem_file = args.dem_file
+    if args.dsm_file is not None:
+        config.dsm_file = args.dsm_file
+    if args.dem_units is not None:
+        config.dem_units = args.dem_units
+    if args.surface_mode is not None:
+        config.surface_mode = args.surface_mode
+    if args.sample_step is not None:
+        config.sample_step_m = args.sample_step
+    if args.rooftop_margin is not None:
+        config.rooftop_margin_m = parse_height_value_m(args.rooftop_margin)
+    if args.basemap is not None:
+        config.basemap = args.basemap
     if args.crs is not None:
         config.crs_epsg = args.crs
     if args.output_dir is not None:
@@ -279,8 +324,12 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                     config.locations[k]["height_m"] = config.default_repeater_height_m
 
     os.environ.setdefault("QGIS_CUSTOM_CONFIG_PATH", os.path.join(tempfile.gettempdir(), "qgis_los_config"))
-    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if sys.platform.startswith("linux"):
+        xdg_dir = os.environ.get("XDG_RUNTIME_DIR", "")
+        wl_disp = os.environ.get("WAYLAND_DISPLAY", "")
+        has_wayland = bool(wl_disp) and bool(xdg_dir) and os.path.exists(os.path.join(xdg_dir, wl_disp))
+        if not os.environ.get("DISPLAY") and not has_wayland:
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     from qgis.core import (
         QgsApplication,
@@ -386,6 +435,9 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             image_server_base=config.image_server_base,
             wkid=wkid,
             dem_file=config.dem_file,
+            unit_scale=config.dem_unit_scale,
+            sampling_mode="nearest" if config.is_dsm_mode else "bilinear",
+            dsm_file=config.dsm_file,
         )
 
         all_dem_keys = list(active_location_keys) + [
@@ -404,8 +456,8 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             min(all_ys) - dem_padding,
             max(all_xs) + dem_padding,
             max(all_ys) + dem_padding,
-            resolution_m=6.0 if multi_link_mode else 3.0,
-            max_px=2500,
+            resolution_m=1.5 if config.is_dsm_mode else (6.0 if multi_link_mode else 3.0),
+            max_px=4000 if config.is_dsm_mode else 2500,
         )
 
         link_results = []

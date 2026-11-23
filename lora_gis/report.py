@@ -37,6 +37,15 @@ def export_markdown_report(
     freq_label = f"{config.freq_mhz:.0f}" if config.freq_mhz.is_integer() else f"{config.freq_mhz:.1f}"
     relay_ft = config.relay_height_m * 3.28084
 
+    surface_desc = (
+        f"DSM (nearest-neighbor, `{config.effective_sample_step_m:.1f} m` ray step, "
+        f"`{config.effective_rooftop_margin_m:.1f} m` rooftop margin)"
+        if config.is_dsm_mode
+        else "Bare-earth DEM (bilinear interpolation)"
+    )
+    if config.dem_units.strip().lower() not in ("m", "meter", "meters"):
+        surface_desc += f", input units `{config.dem_units}`"
+
     md_lines = [
         f"# {config.title} {freq_label} MHz LoRa (MeshCore) Relay Report — {route_names} ({timestamp_str})",
         "",
@@ -48,6 +57,7 @@ def export_markdown_report(
         "| :--- | :--- |",
         f"| **Operating Frequency** | `{config.freq_mhz:.1f} MHz` (LoRa / MeshCore, $\\lambda = {config.wavelength_m*100:.1f}\\text{{ cm}}$) |",
         f"| **Target Fresnel Clearance** | `>= {config.min_fresnel_clearance*100:.0f}%` of 1st Fresnel Zone ($F_1$), $K = 4/3$ Earth Curvature |",
+        f"| **Surface Model** | {surface_desc} |",
         f"| **Intermediate Relay Height** | `{config.relay_height_m:.1f} m` (`{relay_ft:.1f} ft`) AGL |",
     ]
 

@@ -155,7 +155,13 @@ Explicit candidates can also be configured in JSON via `"candidate_relays"` and 
 | `--grid-step` | Starting coarse search grid step in meters | `500.0` |
 | `--min-grid-step` | Finest search grid step in meters | `150.0` |
 | `--dem` | DEM preset (`usgs-3dep`, `ny-gis`) or ArcGIS ImageServer URL | `usgs-3dep` |
-| `--dem-file` | Local GeoTIFF DEM file path | — |
+| `--dem-file` | Local georeferenced GeoTIFF DEM/DSM file path | None |
+| `--dsm-file` | Optional separate local georeferenced DSM GeoTIFF (buildings/trees) overlaid for path obstructions | None |
+| `--dem-units` | Vertical elevation units of the DEM/DSM source (`m`, `ft`, `us-ft`) | `m` |
+| `--surface-mode` | Surface sampling mode: `dem` (bare-earth bilinear) or `dsm` (nearest-neighbor + dense urban sampling) | `dem` |
+| `--sample-step` | Sightline ray sample spacing in meters | `5.0` (DSM) / `25.0` (DEM) |
+| `--rooftop-margin` | Near-field exclusion radius around endpoints in DSM mode (`m` or `ft`) | `12m` (DSM) / `0m` (DEM) |
+| `--basemap` | Map backdrop preset (`topo`, `osm`, `satellite`) or custom QGIS XYZ/WMS URI | `topo` |
 | `--crs` | Explicit metric EPSG code (auto-detected UTM zone if omitted) | Auto UTM |
 | `--state` | Default 2-letter US state code for USGS GeoNames lookups | — |
 | `--output-dir`, `-o` | Output directory for `YYYY-MM-DD_HH-MM-SS/map.png` & `report.md` | `results` |
