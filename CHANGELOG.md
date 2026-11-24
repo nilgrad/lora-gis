@@ -2,6 +2,26 @@
 
 All notable changes to `lora-gis` are documented in this file.
 
+## [1.3.0] - 2026-11-24
+
+### Added
+- **Canada Elevation & 1 m LiDAR DSM Support (NRCan CanElevation Series)**:
+  - Added STAC + GDAL `/vsicurl/` Cloud-Optimized GeoTIFF streaming backend (`lora_gis/nrcan.py`) with zero new Python dependencies (no PDAL required for 1 m Canadian LiDAR DSMs).
+  - Added `--dem` presets `canada-hrdem` (1 m bare-earth DTM), `canada-hrdem-dsm` (1 m DTM + 1 m LiDAR DSM including buildings and tree canopy), `canada-mrdem` (30 m nationwide DTM), and `canada-mrdem-dsm` (plus `nrcan-*` aliases).
+  - Added multi-tile GDAL VRT stitching, local temp-dir caching of warped grids, and automatic NoData (`-32767.0`) gap-filling across `hrdem-mosaic-1m`, `hrdem-mosaic-2m`, and nationwide `mrdem-30`.
+- **Canadian Place & Terrain Feature Lookups (NRCan CGNDB)**:
+  - Added `lookup_cgndb_place()` and `fetch_cgndb_features()` against NRCan's Canadian Geographical Names Data Base (CGNDB) API, mapping all 13 Canadian province/territory codes (`AB, BC, MB, NB, NL, NS, NT, NU, ON, PE, QC, SK, YT`) to Statistics Canada SGC codes.
+  - Added `--province` CLI alias alongside `--state` (and `"default_province"` in JSON configs), automatic routing of Canadian province codes to CGNDB, and smart Canadian DEM/basemap defaults when not explicitly overridden.
+- **Basemaps, Northern UTM & Offline Tests**:
+  - Added `world-topo` (Esri World Topographic) and `canada-topo` (NRCan CBMT WMS) basemap presets.
+  - Expanded NAD83 UTM (`EPSG:269xx`) auto-detection to zones `7N..22N` (`14°N..84°N`) to cover Yukon, coastal/northern BC, and northern Canada.
+  - Added 13 offline unit and headless PyQGIS tests in `tests/test_canada_nrcan.py` (81 total tests).
+
+### Fixed
+- **Non-ArcGIS Elevation Lookups & Map Peak Labels**:
+  - Guarded `DEMProvider.fetch_elevations()` so local GeoTIFF and NRCan backends do not attempt ArcGIS `getSamples` requests for out-of-bounds points.
+  - Omitted `-9999 m` sentinel elevation text on map peak labels and report entries outside the cached DEM grid, and filtered CGNDB features strictly to the rendered map extent.
+
 ## [1.2.0] - 2026-11-23
 
 ### Added

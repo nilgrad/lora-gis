@@ -10,10 +10,11 @@ In mountainous regions, bare-earth terrain (DEM) dominates line-of-sight. In fla
 
 | Mode / Flag | Includes Buildings | Includes Trees | Extra Deps | Best For |
 | :--- | :---: | :---: | :--- | :--- |
-| Default bare-earth DEM (`--dem usgs-3dep`) | No | No | None | Mountain & rural regional routing |
+| Default bare-earth DEM (`--dem usgs-3dep` / `--dem canada-hrdem`) | No | No | None | Mountain & rural regional routing |
 | `--buildings osm` | Yes (OSM tags + heuristics) | No | None | Zero-setup city rooftop ranking, named buildings, water towers, and grain silos |
 | `--buildings overture` / `hybrid` | Yes (ML heights + OSM names/towers) | No | `overture` extra | Cities where OSM lacks explicit `height` / `building:levels` tags |
 | Local DSM GeoTIFF (`--dem-file` / `--dsm-file`) | Yes (exact rooflines) | Yes | None (GDAL bundled with PyQGIS) | Highest accuracy when you have regional LiDAR DSM tiles |
+| `--dem canada-hrdem-dsm` (NRCan CanElevation) | Yes (1 m LiDAR rooflines) | Yes | None (GDAL `/vsicurl/`) | Automated 1 m Canadian LiDAR DTM + DSM (with automatic `hrdem-mosaic-2m` / `mrdem-30` gap-fill) |
 | `--lidar-ept` / `--dem usgs-3dep-dsm` | Yes (exact rooflines) | Yes | `lidar` (`pdal`) extra | Automated 1-2 m US LiDAR DSMs without manual downloads |
 
 ---
@@ -136,6 +137,29 @@ python3 -m lora_gis \
   --buildings hybrid \
   --top 10
 ```
+
+### Canada HRDEM 1 m LiDAR DSM Streaming (`--dem canada-hrdem-dsm`)
+
+Across Canada, Natural Resources Canada's **CanElevation Series (HRDEM)** distributes both bare-earth **DTM** and full **DSM** (buildings + tree canopy) as Cloud-Optimized GeoTIFFs via a public STAC API. `lora-gis` streams them directly via GDAL `/vsicurl/` with **no extra dependencies** (no PDAL required):
+
+```bash
+# Stream NRCan 1 m HRDEM DTM + DSM with OSM building labels/addresses for rooftop ranking
+python3 -m lora_gis \
+  --city "Ottawa, ON" \
+  --dem canada-hrdem-dsm \
+  --radius 2km \
+  --top 10
+
+# Pure DSM peak extraction (skips Overpass building query)
+python3 -m lora_gis \
+  --city downtown=45.4215,-75.6972 \
+  --dem canada-hrdem-dsm \
+  --buildings none \
+  --radius 2km
+```
+
+- Automatically stitches multi-tile bounding boxes via GDAL VRT and backfills any LiDAR NoData gaps from `hrdem-mosaic-2m` and nationwide `mrdem-30` (30 m).
+- Caches warped elevation arrays locally in your temp directory so repeat runs over the same area are fast.
 
 ### USGS 3DEP LiDAR EPT Streaming (`--lidar-ept` / `--dem usgs-3dep-dsm`)
 

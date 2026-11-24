@@ -10,10 +10,10 @@ A **PyQGIS** Line-of-Sight (LOS), **LoRa / MeshCore RF repeater pathfinder**, an
 
 - **1-Hop & 2-Hop Repeater Discovery**: Scans candidate grids from coarse (`500 m`) down to fine (`150 m`) resolution to find single-repeater (`1-hop`) and two-repeater (`2-hop`) paths across terrain, plus explicit candidate relay testing (`--candidates`).
 - **City Rooftop Ranking & Viewshed Coverage (`--city`)**: Evaluates buildings, water towers, grain silos, and DSM peaks across a city radius, ranking the best rooftops by `% city area covered` and recommending greedy 2-site and 3-site combinations.
-- **Urban Buildings & LiDAR DSM Support**: Overlays OpenStreetMap buildings (`--buildings osm`), optional Overture Maps ML building heights (`--buildings overture` / `hybrid`), local georeferenced GeoTIFF DSMs (`--dem-file` / `--dsm-file`), or on-the-fly USGS 3DEP LiDAR EPT streaming (`--lidar-ept`).
+- **Urban Buildings & LiDAR DSM Support**: Overlays OpenStreetMap buildings (`--buildings osm`), optional Overture Maps ML building heights (`--buildings overture` / `hybrid`), local georeferenced GeoTIFF DSMs (`--dem-file` / `--dsm-file`), NRCan CanElevation 1 m Canadian LiDAR DSMs (`--dem canada-hrdem-dsm`, zero extra deps), or on-the-fly USGS 3DEP LiDAR EPT streaming (`--lidar-ept`).
 - **LoRa RF Propagation Modeling**: Evaluates **1st Fresnel Zone ($F_1$) clearance** at `915 MHz`, `868 MHz`, or `433 MHz`, **4/3 effective Earth curvature + atmospheric refraction**, minimum terrain/surface clearance, and **Free-Space Path Loss (FSPL in dB)**.
-- **Automatic UTM Projection & Multi-Source Elevation**: Auto-detects local metric UTM zones (`EPSG:269xx` / `326xx` / `327xx`) and streams 32-bit float elevation grids from **USGS 3DEP**, state GIS servers (`ny-gis`), custom ArcGIS ImageServers, or local GeoTIFFs.
-- **Automated Cartography & Markdown Reports**: Exports high-resolution (`1920x1080`) PNG maps (`topo`, `osm`, or `satellite` basemaps), cross-sectional terrain/building profiles, viewshed coverage heatmaps, and detailed Markdown reports (`results/YYYY-MM-DD_HH-MM-SS/`).
+- **Automatic UTM Projection & Multi-Source Elevation**: Auto-detects local metric UTM zones (`EPSG:269xx` / `326xx` / `327xx`) and streams 32-bit float elevation grids from **USGS 3DEP**, **NRCan CanElevation (Canada HRDEM 1m/2m & MRDEM-30)**, state GIS servers (`ny-gis`), custom ArcGIS ImageServers, or local GeoTIFFs.
+- **Automated Cartography & Markdown Reports**: Exports high-resolution (`1920x1080`) PNG maps (`topo`, `world-topo`, `canada-topo`, `osm`, or `satellite` basemaps), cross-sectional terrain/building profiles, viewshed coverage heatmaps, and detailed Markdown reports (`results/YYYY-MM-DD_HH-MM-SS/`).
 
 ---
 
@@ -32,11 +32,13 @@ See [docs/installation.md](docs/installation.md) for native Linux, macOS, Window
 ### Run Your First Analysis
 
 ```bash
-# 1. Simple point-to-point repeater discovery across terrain
+# 1. Simple point-to-point repeater discovery across terrain (US or Canada)
 python3 -m lora_gis --route "Beacon, NY" "New Paltz, NY"
+python3 -m lora_gis --route "Banff, AB" "Canmore, AB"
 
 # 2. City rooftop viewshed ranking across a 3 km radius
 python3 -m lora_gis --city "Salina, KS" --radius 3km --top 10 --rx-height 6ft
+python3 -m lora_gis --city "Ottawa, ON" --dem canada-hrdem-dsm --radius 2km --top 10
 ```
 
 ---

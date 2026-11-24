@@ -8,15 +8,15 @@ def detect_utm_crs(lat: float, lon: float, prefer_nad83_na: bool = True) -> Tupl
     Computes the metric UTM EPSG code, numeric WKID, and human-readable zone name
     from a reference (lat, lon) coordinate.
 
-    For North America (Zones 10N..19N, lat >= 15°N), defaults to NAD83 UTM (EPSG:269xx)
-    for compatibility with USGS 3DEP and state GIS servers; elsewhere uses WGS84 UTM
-    (EPSG:326xx North / EPSG:327xx South).
+    For North America (Zones 7N..22N, 14°N..84°N), defaults to NAD83 UTM (EPSG:269xx)
+    for compatibility with USGS 3DEP, NRCan CanElevation, and regional GIS servers;
+    elsewhere uses WGS84 UTM (EPSG:326xx North / EPSG:327xx South).
     """
     zone = int((lon + 180.0) // 6.0) + 1
     zone = max(1, min(60, zone))
     hemisphere = "N" if lat >= 0.0 else "S"
 
-    if prefer_nad83_na and hemisphere == "N" and 10 <= zone <= 22 and 14.0 <= lat <= 72.0:
+    if prefer_nad83_na and hemisphere == "N" and 7 <= zone <= 22 and 14.0 <= lat <= 84.0:
         wkid = 26900 + zone
     elif hemisphere == "N":
         wkid = 32600 + zone

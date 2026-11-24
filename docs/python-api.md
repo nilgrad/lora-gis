@@ -148,3 +148,19 @@ from lora_gis import build_pdal_dsm_pipeline, match_ept_resources_for_bbox, stre
 ```
 
 - `stream_3dep_lidar_dsm(dem, bbox_wgs84, utm_bounds, wkid, resolution_m=2.0)`: Discovers intersecting USGS 3DEP EPT datasets, streams via optional `pdal`, caches the max-Z DSM GeoTIFF, and attaches it to `dem.surface_cache`.
+
+### NRCan CanElevation (Canada HRDEM / MRDEM-30) & CGNDB GeoNames
+
+```python
+from lora_gis import (
+    load_nrcan_dem,
+    lookup_cgndb_place,
+    fetch_cgndb_features,
+    search_nrcan_stac_assets,
+    stream_nrcan_elevation_grid,
+)
+```
+
+- `load_nrcan_dem(dem, dem_source, utm_bounds, wkid, resolution_m=3.0)`: Streams NRCan CanElevation bare-earth DTM (`canada-hrdem` / `canada-mrdem`) and optionally 1 m LiDAR DSM (`canada-hrdem-dsm`) directly via STAC + GDAL `/vsicurl/` with automatic NoData gap-fill.
+- `lookup_cgndb_place(place_token, default_province=None)`: Resolves Canadian cities, towns, and summits via NRCan's CGNDB API.
+- `fetch_cgndb_features(extent_rect, wkid)`: Queries mountain peaks and populated places in a UTM map extent for map labeling and reports.

@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .config import LoRaGISConfig
 from .dem import DEMProvider
-from .geonames import fetch_geonames_features
+from .geonames import fetch_geonames_features, is_canada_province
 
 
 def render_topographic_map(
@@ -51,6 +51,8 @@ def render_topographic_map(
 
     basemap_labels = {
         "topo": "USGS Topographic Basemap",
+        "world-topo": "World Topographic Basemap",
+        "canada-topo": "NRCan Canada Basemap (CBMT)",
         "osm": "OpenStreetMap Street Basemap",
         "satellite": "World Satellite Imagery",
     }
@@ -338,15 +340,33 @@ def render_topographic_map(
         full_extent.combineExtentWith(explicit_blocked_layer.extent())
     full_extent.scale(config.map_extent_scale)
 
-    peaks_list, towns_list = fetch_geonames_features(full_extent, wkid, config.geonames_url)
+    use_canada_geonames = (
+        config.is_canada_dem
+        or is_canada_province(config.default_state)
+        or any(
+            config.locations.get(k, {}).get("country") == "CA"
+            for res in link_results
+            for k in (res["u_key"], res["v_key"])
+        )
+    )
+    peaks_list, towns_list = fetch_geonames_features(
+        full_extent,
+        wkid,
+        config.geonames_url,
+        use_canada=use_canada_geonames,
+        cgndb_url=config.cgndb_url,
+    )
     peak_elevs = []
     if peaks_list:
         peak_elevs = dem.fetch_elevations([coords for _, coords in peaks_list])
         for (p_name, p_coords), p_elev_m in zip(peaks_list, peak_elevs):
             f_p = QgsFeature()
             f_p.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*p_coords)))
-            p_elev_ft = p_elev_m * 3.28084
-            f_p.setAttributes([f"▲ {p_name}\n({p_elev_m:.0f} m / {p_elev_ft:,.0f} ft)"])
+            if p_elev_m > -9000.0:
+                p_elev_ft = p_elev_m * 3.28084
+                f_p.setAttributes([f"▲ {p_name}\n({p_elev_m:.0f} m / {p_elev_ft:,.0f} ft)"])
+            else:
+                f_p.setAttributes([f"▲ {p_name}"])
             p_prov.addFeature(f_p)
         peak_layer.updateExtents()
 
@@ -909,6 +929,8 @@ def render_city_viewshed_map(
 
     basemap_labels = {
         "topo": "USGS Topographic Basemap",
+        "world-topo": "World Topographic Basemap",
+        "canada-topo": "NRCan Canada Basemap (CBMT)",
         "osm": "OpenStreetMap Street Basemap",
         "satellite": "World Satellite Imagery",
     }

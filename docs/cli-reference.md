@@ -16,7 +16,7 @@ Run `python3 -m lora_gis --help` (or `lora-gis --help`) at any time to view grou
 | `--candidates`, `--candidate-relays` | Explicit candidate relay locations (`slug` or `name=lat,lon`) evaluated alongside the grid search or city ranking | None |
 | `--auto-candidates` | Auto-select top `N` tallest structures from `--buildings` as candidate relays in route/link mode | `0` |
 | `--min-building-height` | Minimum structure height for `--auto-candidates` and city filtering (`m` or `ft`) | `15m` |
-| `--state` | Default 2-letter US state code for USGS GeoNames lookups | None |
+| `--state`, `--province` | Default 2-letter US state or Canadian province/territory code for USGS GeoNames / NRCan CGNDB lookups (`NY`, `CO`, `ON`, `BC`, etc.) | None |
 
 ### Antenna & Relay Heights
 
@@ -42,7 +42,7 @@ Run `python3 -m lora_gis --help` (or `lora-gis --help`) at any time to view grou
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
-| `--dem` | DEM preset (`usgs-3dep`, `usgs-3dep-dsm`, `ny-gis`) or custom ArcGIS ImageServer URL | `usgs-3dep` |
+| `--dem` | DEM preset (`usgs-3dep`, `usgs-3dep-dsm`, `ny-gis`, `canada-hrdem`, `canada-hrdem-dsm`, `canada-mrdem`, `canada-mrdem-dsm`) or custom ArcGIS ImageServer URL | `usgs-3dep` (auto `canada-hrdem` / `canada-hrdem-dsm` for Canadian lookups) |
 | `--dem-file` | Local georeferenced GeoTIFF DEM/DSM file path | None |
 | `--dsm-file` | Optional separate local georeferenced DSM GeoTIFF (buildings/trees) overlaid for path obstructions | None |
 | `--dem-units` | Vertical elevation units of the DEM/DSM source (`m`, `ft`, `us-ft`) | `m` |
@@ -73,7 +73,7 @@ Run `python3 -m lora_gis --help` (or `lora-gis --help`) at any time to view grou
 
 | Flag | Description | Default |
 | :--- | :--- | :--- |
-| `--basemap` | Map backdrop preset (`topo`, `osm`, `satellite`) or custom QGIS XYZ/WMS URI | `topo` (`osm` in `--city`) |
+| `--basemap` | Map backdrop preset (`topo`, `world-topo`, `canada-topo`, `osm`, `satellite`) or custom QGIS XYZ/WMS URI | `topo` (`world-topo` for Canada, `osm` in `--city`) |
 | `--output-dir`, `-o` | Output directory for `YYYY-MM-DD_HH-MM-SS/map.png` & `report.md` | `results` |
 | `--title` | Report title prefix | `LoRa-GIS` |
 
@@ -133,4 +133,4 @@ All major CLI options can be saved in a JSON file. CLI flags passed on the comma
 }
 ```
 
-Additional supported JSON keys: `"links"` (array of `[loc1, loc2]` pairs), `"dem_file"`, `"dsm_file"`, `"dem_units"`, `"surface_mode"`, `"overpass_url"`, `"lidar_ept"`, `"lidar_resolution_m"`, `"ept_url"`, `"auto_candidates"`, `"sample_step_m"`, `"initial_grid_step_m"`, `"min_grid_step_m"`, `"crs_epsg"`.
+Additional supported JSON keys: `"default_province"`, `"links"` (array of `[loc1, loc2]` pairs), `"dem_file"`, `"dsm_file"`, `"dem_units"`, `"surface_mode"`, `"overpass_url"`, `"cgndb_url"`, `"nrcan_stac_url"`, `"lidar_ept"`, `"lidar_resolution_m"`, `"ept_url"`, `"auto_candidates"`, `"sample_step_m"`, `"initial_grid_step_m"`, `"min_grid_step_m"`, `"crs_epsg"`.

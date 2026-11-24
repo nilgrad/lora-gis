@@ -38,7 +38,7 @@ def export_markdown_report(
     freq_label = f"{config.freq_mhz:.0f}" if config.freq_mhz.is_integer() else f"{config.freq_mhz:.1f}"
     relay_ft = config.relay_height_m * 3.28084
 
-    surface_kind = "USGS 3DEP LiDAR EPT DSM" if config.use_lidar_ept else "DSM"
+    surface_kind = config.surface_kind_label
     surface_desc = (
         f"{surface_kind} (nearest-neighbor, `{config.effective_sample_step_m:.1f} m` ray step, "
         f"`{config.effective_rooftop_margin_m:.1f} m` rooftop margin)"
@@ -398,18 +398,25 @@ def export_markdown_report(
     sec_idx += 1
 
     if peaks_list or towns_list:
+        is_ca_geonames = config.is_canada_dem or any(
+            config.locations.get(k, {}).get("country") == "CA" for k in active_location_keys
+        )
+        geonames_label = "NRCan CGNDB GeoNames" if is_ca_geonames else "USGS GeoNames"
         md_lines.extend([
             "",
-            f"## {sec_idx}. Surrounding Terrain Features (USGS GeoNames)",
+            f"## {sec_idx}. Surrounding Terrain Features ({geonames_label})",
             "",
         ])
         if peaks_list:
             md_lines.append("### Mountain Summits & Peaks")
             for (p_name, p_coords), p_elev_m in zip(peaks_list, peak_elevs):
                 p_ll = inv_transform.transform(QgsPointXY(*p_coords))
-                md_lines.append(
-                    f"- **{p_name}**: `{p_elev_m:.0f} m` (`{p_elev_m * 3.28084:,.0f} ft`) — `{p_ll.y():.5f}, {p_ll.x():.5f}`"
-                )
+                if p_elev_m > -9000.0:
+                    md_lines.append(
+                        f"- **{p_name}**: `{p_elev_m:.0f} m` (`{p_elev_m * 3.28084:,.0f} ft`) — `{p_ll.y():.5f}, {p_ll.x():.5f}`"
+                    )
+                else:
+                    md_lines.append(f"- **{p_name}**: `{p_ll.y():.5f}, {p_ll.x():.5f}`")
             md_lines.append("")
         if towns_list:
             md_lines.append("### Populated Places & Towns")
@@ -441,7 +448,7 @@ def export_city_markdown_report(
     f1_pct_target = int(round(config.min_fresnel_clearance * 100))
     tg = city_result["target_grid"]
 
-    surface_kind = "USGS 3DEP LiDAR EPT DSM" if config.use_lidar_ept else "DSM"
+    surface_kind = config.surface_kind_label
     b_src_labels = {
         "osm": "OpenStreetMap",
         "overture": "Overture Maps",
