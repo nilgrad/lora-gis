@@ -11,7 +11,7 @@ import urllib.request
 import numpy as np
 
 NRCAN_STAC_SEARCH_URL = "https://datacube.services.geo.ca/stac/api/search"
-NRCAN_USER_AGENT = "lora-gis/1.2 (+https://github.com/nilgrad/lora-gis)"
+NRCAN_USER_AGENT = "lora-gis/1.3 (+https://github.com/nilgrad/lora-gis)"
 
 NRCAN_DEM_PRESETS: Dict[str, Dict] = {
     "canada-hrdem": {
