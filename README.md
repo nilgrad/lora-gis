@@ -83,6 +83,19 @@ python3 -m lora_gis --city "Salina, KS" --radius 2.5km --top 8 --rx-height 6ft -
   - **Top Ranked Single Site (`#1 Water Tower`, `35 m / 115 ft` + `10 ft` mast)**: Covers **`34.4%` optical LOS** and **`10.1%` >= 60% $F_1$** (`2.83 km` max clear range), outperforming downtown `#5 United Building` (`119 West Iron Avenue`, `35 m / 115 ft`, `34.1%` LOS / `6.6%` $F_1$) due to lower adjacent building shadowing.
   - **Greedy 3-Site Combo (`Water Tower + 2 Radio Masts`)**: Expands city coverage to **`43.3%` optical LOS** and **`22.7%` >= 60% $F_1$** (more than doubling single-site Fresnel-clear coverage).
 
+### Canadian Rockies Routing (`Banff, AB <-> Canmore, AB`)
+
+Generated with:
+
+```bash
+python3 -m lora_gis --route "Banff, AB" "Canmore, AB"
+```
+
+- **Full RF Analysis Report & Topographic Map**: [`examples/banff-canmore-ab/report.md`](examples/banff-canmore-ab/report.md) ([`map.png`](examples/banff-canmore-ab/map.png))
+  - **Zero-Config NRCan CanElevation & CGNDB Resolution**: Automatically resolved `Banff` (`1,386 m`) and `Canmore` (`1,311 m`) via NRCan CGNDB, switched to `canada-hrdem` (stitching `hrdem-mosaic-1m`, `hrdem-mosaic-2m`, and `mrdem-30` from `1,304 m` to `2,996 m`) and `world-topo`, and labeled surrounding Rockies summits (`Mount Rundle`, `Sulphur Mountain`, `Tunnel Mountain`, `Princess Margaret Mountain`, `Sanson Peak`).
+  - **Direct Link (`17.81 km`)**: Blocked by Mount Rundle (`-1,427.0 m` / `-4,682 ft` deficit).
+  - **Optimal 2-Hop Repeater Pair (`17.83 km`, `+0.1%` path overhead)**: Clears every hop with **`128%` worst-case $F_1$** (`+13.1 m` minimum clearance, `110.5 dB` max hop FSPL) across two high-elevation ridge relays (`2,762 m` and `2,868 m`), alongside 6 discovered 1-hop ridge candidates.
+
 ---
 
 ## Acknowledgments
