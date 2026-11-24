@@ -8,12 +8,12 @@ A **PyQGIS** Line-of-Sight (LOS), **LoRa / MeshCore RF repeater pathfinder**, an
 
 ## Key Features
 
-- **1-Hop & 2-Hop Repeater Discovery**: Scans candidate grids from coarse (`500 m`) down to fine (`150 m`) resolution to find single-repeater (`1-hop`) and two-repeater (`2-hop`) paths across terrain, plus explicit candidate relay testing (`--candidates`).
-- **City Rooftop Ranking & Viewshed Coverage (`--city`)**: Evaluates buildings, water towers, grain silos, and DSM peaks across a city radius, ranking the best rooftops by `% city area covered` and recommending greedy 2-site and 3-site combinations.
-- **Urban Buildings & LiDAR DSM Support**: Overlays OpenStreetMap buildings (`--buildings osm`), optional Overture Maps ML building heights (`--buildings overture` / `hybrid`), local georeferenced GeoTIFF DSMs (`--dem-file` / `--dsm-file`), NRCan CanElevation 1 m Canadian LiDAR DSMs (`--dem canada-hrdem-dsm`, zero extra deps), or on-the-fly USGS 3DEP LiDAR EPT streaming (`--lidar-ept`).
-- **LoRa RF Propagation Modeling**: Evaluates **1st Fresnel Zone ($F_1$) clearance** at `915 MHz`, `868 MHz`, or `433 MHz`, **4/3 effective Earth curvature + atmospheric refraction**, minimum terrain/surface clearance, and **Free-Space Path Loss (FSPL in dB)**.
-- **Automatic UTM Projection & Multi-Source Elevation**: Auto-detects local metric UTM zones (`EPSG:269xx` / `326xx` / `327xx`) and streams 32-bit float elevation grids from **USGS 3DEP**, **NRCan CanElevation (Canada HRDEM 1m/2m & MRDEM-30)**, state GIS servers (`ny-gis`), custom ArcGIS ImageServers, or local GeoTIFFs.
-- **Automated Cartography & Markdown Reports**: Exports high-resolution (`1920x1080`) PNG maps (`topo`, `world-topo`, `canada-topo`, `osm`, or `satellite` basemaps), cross-sectional terrain/building profiles, viewshed coverage heatmaps, and detailed Markdown reports (`results/YYYY-MM-DD_HH-MM-SS/`).
+- **1-Hop & 2-Hop Repeater Discovery**: Scans coarse-to-fine terrain grids (500 m down to 150 m) to find single-relay and two-relay paths, plus explicit candidate site evaluation.
+- **City Rooftop Ranking & Viewshed Coverage**: Evaluates buildings, water towers, silos, and DSM peaks across a city radius, ranking sites by covered area and recommending 2-site and 3-site combinations.
+- **Urban Buildings & LiDAR DSMs**: Models building clutter and tree canopy using OpenStreetMap footprints, optional Overture Maps heights, NRCan 1 m Canadian LiDAR DSMs, local GeoTIFFs, or optional USGS 3DEP LiDAR streaming.
+- **LoRa RF Propagation Modeling**: Computes 1st Fresnel Zone ($F_1$) clearance at 915, 868, or 433 MHz, 4/3 effective Earth curvature, terrain/surface clearance, and Free-Space Path Loss (FSPL).
+- **Multi-Source Elevation & Auto-UTM**: Auto-detects the local UTM zone and streams elevation data from USGS 3DEP, NRCan CanElevation (Canada HRDEM and MRDEM-30), state GIS servers, custom ArcGIS ImageServers, or local GeoTIFFs.
+- **Automated Cartography & Reports**: Exports 1920x1080 topographic, street, or satellite maps, cross-sectional blockage profiles, viewshed coverage heatmaps, and Markdown RF reports.
 
 ---
 
@@ -59,42 +59,30 @@ python3 -m lora_gis --city "Ottawa, ON" --dem canada-hrdem-dsm --radius 2km --to
 
 ### Mountain Terrain Routing (`Roscoe <-> Livingston Manor <-> Liberty, NY`)
 
-Generated with:
-
 ```bash
 python3 -m lora_gis --state NY --dem ny-gis --route "Roscoe" "Livingston Manor" "Liberty" --hops 2 --candidates "shandelee-ridge=41.8804,-74.8890" "ferndale-ridge=41.7665,-74.6997" "willowemoc-ridge=41.9056,-74.6774"
 ```
 
-- **Full RF Analysis Report, Topographic Map & Terrain Profiles**: [`examples/roscoe-livingston-manor-liberty/report.md`](examples/roscoe-livingston-manor-liberty/report.md)
-  - **Leg 1 (`Roscoe <-> Livingston Manor`, `7.95 km`)**: Direct sightline blocked by terrain (`-185.3 m` deficit); solved by a **2-Hop Repeater Pair** (`7.98 km` total path, `69%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing **Shandelee Ridge** with a grid relay (`14.77 km`, `56%` $F_1$).
-  - **Leg 2 (`Livingston Manor <-> Liberty`, `12.93 km`)**: Direct sightline blocked by terrain (`-188.3 m` deficit); solved by a **2-Hop Repeater Pair** (`13.02 km` total path, `70%` worst-case $F_1$ clearance) or a **Hybrid 2-Hop** pairing a grid relay with **Ferndale Ridge** (`23.90 km`, `58%` $F_1$).
-  - **Explicit Candidate Relays & Terrain Blockage (`Shandelee Ridge`, `Ferndale Ridge`, `Willowemoc Ridge`)**: Evaluates three spaced-out ridge sites with cross-sectional terrain profiles ([`candidate_profiles.png`](examples/roscoe-livingston-manor-liberty/candidate_profiles.png)), green clear sightlines, and red `x` ridge blockage markers on [`map.png`](examples/roscoe-livingston-manor-liberty/map.png). **Shandelee Ridge** (`655 m / 2,148 ft`) has an unblocked leg to `Roscoe` (`87%` $F_1$, `+11.1 m`) and **Ferndale Ridge** (`441 m / 1,446 ft`) has an unblocked leg to `Liberty` (`61%` $F_1$, `+5.0 m`), while **Willowemoc Ridge** (`642 m`) is blocked across all legs (`-139.0 m` / `-107.9 m` / `-116.5 m`).
+- **Report**: [`examples/roscoe-livingston-manor-liberty/report.md`](examples/roscoe-livingston-manor-liberty/report.md)
+- Finds 2-hop and hybrid repeater paths across two terrain-blocked Catskills legs (`7.95 km` and `12.93 km`, up to `70%` worst-case $F_1$), with cross-sectional blockage profiles for three candidate ridge sites.
 
 ### City Rooftop Viewshed & Building Clutter (`Salina, KS`)
-
-Generated with:
 
 ```bash
 python3 -m lora_gis --city "Salina, KS" --radius 2.5km --top 8 --rx-height 6ft --mast-height 10ft
 ```
 
-- **Full City Viewshed Report & Coverage Map**: [`examples/salina-ks-city-viewshed/report.md`](examples/salina-ks-city-viewshed/report.md) ([`map.png`](examples/salina-ks-city-viewshed/map.png))
-  - **12,281 OpenStreetMap Buildings Rasterized** at `2 m/px` on top of USGS 3DEP elevation data (`363 m` to `404 m`), evaluating 9 tall structures across `2,933` street-level (`6 ft` handheld) target points.
-  - **Top Ranked Single Site (`#1 Water Tower`, `35 m / 115 ft` + `10 ft` mast)**: Covers **`34.4%` optical LOS** and **`10.1%` >= 60% $F_1$** (`2.83 km` max clear range), outperforming downtown `#5 United Building` (`119 West Iron Avenue`, `35 m / 115 ft`, `34.1%` LOS / `6.6%` $F_1$) due to lower adjacent building shadowing.
-  - **Greedy 3-Site Combo (`Water Tower + 2 Radio Masts`)**: Expands city coverage to **`43.3%` optical LOS** and **`22.7%` >= 60% $F_1$** (more than doubling single-site Fresnel-clear coverage).
+- **Report**: [`examples/salina-ks-city-viewshed/report.md`](examples/salina-ks-city-viewshed/report.md)
+- Rasterizes `12,281` OSM buildings onto USGS 3DEP terrain to rank tall structures for street-level (`6 ft`) coverage, reaching `34.4%` LOS (`10.1%` $F_1$) from `#1 Water Tower` and `43.3%` LOS (`22.7%` $F_1$) with a greedy 3-site combo.
 
 ### Canadian Rockies Routing (`Banff, AB <-> Canmore, AB`)
-
-Generated with:
 
 ```bash
 python3 -m lora_gis --route "Banff, AB" "Canmore, AB"
 ```
 
-- **Full RF Analysis Report & Topographic Map**: [`examples/banff-canmore-ab/report.md`](examples/banff-canmore-ab/report.md) ([`map.png`](examples/banff-canmore-ab/map.png))
-  - **Zero-Config NRCan CanElevation & CGNDB Resolution**: Automatically resolved `Banff` (`1,386 m`) and `Canmore` (`1,311 m`) via NRCan CGNDB, switched to `canada-hrdem` (stitching `hrdem-mosaic-1m`, `hrdem-mosaic-2m`, and `mrdem-30` from `1,304 m` to `2,996 m`) and `world-topo`, and labeled surrounding Rockies summits (`Mount Rundle`, `Sulphur Mountain`, `Tunnel Mountain`, `Princess Margaret Mountain`, `Sanson Peak`).
-  - **Direct Link (`17.81 km`)**: Blocked by Mount Rundle (`-1,427.0 m` / `-4,682 ft` deficit).
-  - **Optimal 2-Hop Repeater Pair (`17.83 km`, `+0.1%` path overhead)**: Clears every hop with **`128%` worst-case $F_1$** (`+13.1 m` minimum clearance, `110.5 dB` max hop FSPL) across two high-elevation ridge relays (`2,762 m` and `2,868 m`), alongside 6 discovered 1-hop ridge candidates.
+- **Report**: [`examples/banff-canmore-ab/report.md`](examples/banff-canmore-ab/report.md)
+- Resolves places and Rockies summits via NRCan CGNDB, streams CanElevation HRDEM/MRDEM-30 terrain (`1,304 m` to `2,996 m`), and routes around Mount Rundle (`17.81 km`) with a 2-hop ridge solution (`128%` worst-case $F_1$).
 
 ---
 
