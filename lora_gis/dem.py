@@ -8,6 +8,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
+from .nrcan import NRCAN_STAC_SEARCH_URL, is_canada_dem_source, load_nrcan_dem
+
 RasterCache = Tuple[np.ndarray, float, float, float, float, int, int]
 
 
@@ -74,6 +76,8 @@ class DEMProvider:
         unit_scale: float = 1.0,
         sampling_mode: str = "bilinear",
         dsm_file: Optional[str] = None,
+        dem_source: Optional[str] = None,
+        nrcan_stac_url: Optional[str] = None,
     ):
         self.image_server_base = image_server_base.rstrip("/")
         self.export_image_url = f"{self.image_server_base}/exportImage"
@@ -81,6 +85,8 @@ class DEMProvider:
         self.wkid = wkid
         self.dem_file = dem_file
         self.dsm_file = dsm_file
+        self.dem_source = dem_source
+        self.nrcan_stac_url = nrcan_stac_url or NRCAN_STAC_SEARCH_URL
         self.unit_scale = float(unit_scale)
         self.sampling_mode = sampling_mode.strip().lower()
         self.cache: Optional[RasterCache] = None
@@ -131,6 +137,17 @@ class DEMProvider:
             if self.cache is not None:
                 _, c_xmin, c_ymin, c_xmax, c_ymax, w, h = self.cache
                 self.pixel_res_m = min((c_xmax - c_xmin) / max(1, w), (c_ymax - c_ymin) / max(1, h))
+        elif is_canada_dem_source(self.dem_source):
+            assert self.dem_source is not None
+            load_nrcan_dem(
+                dem=self,
+                dem_source=self.dem_source,
+                utm_bounds=(xmin, ymin, xmax, ymax),
+                wkid=self.wkid,
+                resolution_m=resolution_m,
+                max_px=max_px,
+                stac_search_url=self.nrcan_stac_url,
+            )
         else:
             self._stream_arcgis_raster(xmin, ymin, xmax, ymax, resolution_m=resolution_m, max_px=max_px)
 
@@ -396,14 +413,20 @@ class DEMProvider:
         """Returns ground elevation values (meters) from cached grid or HTTP point stream."""
         if len(points) == 0:
             return []
+        non_arcgis = bool(self.dem_file) or is_canada_dem_source(self.dem_source)
         if self.cache is not None:
             _, xmin, ymin, xmax, ymax, _, _ = self.cache
             xs = np.array([p[0] for p in points], dtype=np.float64)
             ys = np.array([p[1] for p in points], dtype=np.float64)
-            if np.all((xs >= xmin) & (xs <= xmax) & (ys >= ymin) & (ys <= ymax)):
-                vals = self.sample_ground(xs, ys)
-                if np.all(np.isfinite(vals)):
-                    return vals.tolist()
+            in_bounds = (xs >= xmin) & (xs <= xmax) & (ys >= ymin) & (ys <= ymax)
+            vals = self.sample_ground(xs, ys)
+            if np.all(in_bounds) and np.all(np.isfinite(vals)):
+                return vals.tolist()
+            if non_arcgis:
+                return [float(v) if np.isfinite(v) else -9999.0 for v in vals]
+
+        if non_arcgis:
+            return [-9999.0] * len(points)
 
         elevations: List[float] = []
         batch_size = 100

@@ -7,9 +7,16 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 
+from .nrcan import NRCAN_DEM_PRESETS, NRCAN_STAC_SEARCH_URL, is_canada_dem_source, is_canada_dsm_source
+
+
 DEM_PRESETS = {
     "usgs-3dep": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer",
     "ny-gis": "https://elevation.its.ny.gov/arcgis/rest/services/Latest_DEM/ImageServer",
+    "canada-hrdem": NRCAN_STAC_SEARCH_URL,
+    "canada-hrdem-dsm": NRCAN_STAC_SEARCH_URL,
+    "canada-mrdem": NRCAN_STAC_SEARCH_URL,
+    "canada-mrdem-dsm": NRCAN_STAC_SEARCH_URL,
 }
 
 FEET_TO_METERS = 0.3048
@@ -27,11 +34,15 @@ DEM_UNIT_SCALES = {
 }
 
 DEFAULT_GEONAMES_URL = "https://carto.nationalmap.gov/arcgis/rest/services/geonames/MapServer"
+DEFAULT_CGNDB_URL = "https://geogratis.gc.ca/services/geoname/en/geonames.json"
 DEFAULT_TOPO_BASEMAP_URL = (
     "type=xyz&url=https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}&zmax=16&zmin=0"
 )
 DEFAULT_FALLBACK_BASEMAP_URL = (
     "type=xyz&url=https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}&zmax=19&zmin=0"
+)
+DEFAULT_CANADA_TOPO_BASEMAP_URL = (
+    "contextualWMSLegend=0&crs=EPSG:3857&dpiMode=7&featureCount=10&format=image/png&layers=CBMT&styles=&url=https://maps.geogratis.gc.ca/wms/CBMT"
 )
 DEFAULT_OSM_BASEMAP_URL = (
     "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png&zmax=19&zmin=0"
@@ -42,6 +53,8 @@ DEFAULT_SATELLITE_BASEMAP_URL = (
 
 BASEMAP_PRESETS = {
     "topo": DEFAULT_TOPO_BASEMAP_URL,
+    "world-topo": DEFAULT_FALLBACK_BASEMAP_URL,
+    "canada-topo": DEFAULT_CANADA_TOPO_BASEMAP_URL,
     "osm": DEFAULT_OSM_BASEMAP_URL,
     "satellite": DEFAULT_SATELLITE_BASEMAP_URL,
 }
@@ -139,7 +152,7 @@ class LoRaGISConfig:
     map_extent_scale: float = 1.45
 
     # GIS & DEM settings
-    dem_source: str = "usgs-3dep"             # Preset key ('usgs-3dep', 'usgs-3dep-dsm', 'ny-gis') or custom URL
+    dem_source: str = "usgs-3dep"             # Preset key ('usgs-3dep', 'usgs-3dep-dsm', 'ny-gis', 'canada-hrdem', 'canada-hrdem-dsm', 'canada-mrdem') or custom URL
     dem_file: Optional[str] = None            # Optional local GeoTIFF path (bare-earth DEM or DSM)
     dsm_file: Optional[str] = None            # Optional separate local DSM GeoTIFF (buildings/trees)
     dem_units: str = "m"                      # Vertical elevation units ('m', 'ft', 'us-ft')
@@ -157,7 +170,9 @@ class LoRaGISConfig:
     rooftop_margin_m: Optional[float] = None  # Near-field endpoint exclusion margin in DSM mode (m)
     crs_epsg: Optional[str] = None            # Auto-detected UTM zone if None
     geonames_url: str = DEFAULT_GEONAMES_URL
-    basemap: str = "topo"                     # Preset ('topo', 'osm', 'satellite') or custom QGIS URI
+    cgndb_url: str = DEFAULT_CGNDB_URL
+    nrcan_stac_url: str = NRCAN_STAC_SEARCH_URL
+    basemap: str = "topo"                     # Preset ('topo', 'world-topo', 'canada-topo', 'osm', 'satellite') or custom QGIS URI
     topo_basemap_url: str = DEFAULT_TOPO_BASEMAP_URL
     fallback_basemap_url: str = DEFAULT_FALLBACK_BASEMAP_URL
 
@@ -176,6 +191,7 @@ class LoRaGISConfig:
     custom_height_keys: set = field(default_factory=set)
     basemap_explicit: bool = False
     buildings_explicit: bool = False
+    dem_explicit: bool = False
 
     @property
     def wavelength_m(self) -> float:
@@ -188,8 +204,25 @@ class LoRaGISConfig:
         return DEM_PRESETS.get(self.dem_source, self.dem_source)
 
     @property
+    def is_canada_dem(self) -> bool:
+        return is_canada_dem_source(self.dem_source)
+
+    @property
+    def use_canada_dsm(self) -> bool:
+        return is_canada_dsm_source(self.dem_source)
+
+    @property
     def use_lidar_ept(self) -> bool:
         return bool(self.lidar_ept) or self.dem_source.strip().lower() == "usgs-3dep-dsm"
+
+    @property
+    def surface_kind_label(self) -> str:
+        spec = NRCAN_DEM_PRESETS.get(self.dem_source.strip().lower())
+        if spec and spec.get("load_dsm"):
+            return str(spec["label"])
+        if self.use_lidar_ept:
+            return "USGS 3DEP LiDAR EPT DSM"
+        return "DSM"
 
     @property
     def dem_unit_scale(self) -> float:
@@ -205,6 +238,7 @@ class LoRaGISConfig:
             self.surface_mode.strip().lower() == "dsm"
             or self.dsm_file is not None
             or self.use_lidar_ept
+            or self.use_canada_dsm
             or self.buildings_source.strip().lower() != "none"
             or self.city_target is not None
         )
@@ -237,6 +271,8 @@ class LoRaGISConfig:
             self.title = str(data["title"])
         if "default_state" in data:
             self.default_state = str(data["default_state"])
+        elif "default_province" in data:
+            self.default_state = str(data["default_province"])
         if "freq_mhz" in data:
             self.freq_mhz = float(data["freq_mhz"])
         if "min_fresnel_clearance" in data:
@@ -251,6 +287,7 @@ class LoRaGISConfig:
             self.default_repeater_height_m = parse_height_value_m(data["repeater_height"])
         if "dem_source" in data:
             self.dem_source = str(data["dem_source"])
+            self.dem_explicit = True
         if "dem_file" in data:
             self.dem_file = str(data["dem_file"])
         if "dsm_file" in data:
@@ -314,6 +351,10 @@ class LoRaGISConfig:
             self.min_grid_step_m = float(data["min_grid_step_m"])
         if "crs_epsg" in data:
             self.crs_epsg = str(data["crs_epsg"])
+        if "cgndb_url" in data:
+            self.cgndb_url = str(data["cgndb_url"])
+        if "nrcan_stac_url" in data:
+            self.nrcan_stac_url = str(data["nrcan_stac_url"])
         if "output_dir" in data:
             self.output_dir = str(data["output_dir"])
 

@@ -21,11 +21,27 @@ from .config import (
     parse_height_value_m,
 )
 from .dem import DEMProvider
-from .geonames import lookup_geonames_place, resolve_location
+from .geonames import (
+    fetch_cgndb_features,
+    is_canada_province,
+    lookup_cgndb_place,
+    lookup_geonames_place,
+    resolve_location,
+)
 from .lidar import (
     build_pdal_dsm_pipeline,
     match_ept_resources_for_bbox,
     stream_3dep_lidar_dsm,
+)
+from .nrcan import (
+    NRCAN_DEM_PRESETS,
+    NRCAN_STAC_SEARCH_URL,
+    is_canada_dem_source,
+    is_canada_dsm_source,
+    load_nrcan_dem,
+    search_nrcan_stac_assets,
+    stream_nrcan_elevation_grid,
+    utm_bounds_to_wgs84_bbox,
 )
 from .utm import detect_utm_crs
 from .viewshed import (
@@ -45,14 +61,22 @@ __all__ = [
     "DEM_UNIT_SCALES",
     "DEMProvider",
     "LoRaGISConfig",
+    "NRCAN_DEM_PRESETS",
+    "NRCAN_STAC_SEARCH_URL",
     "analyze_city_viewshed",
     "apply_cli_args",
     "build_pdal_dsm_pipeline",
     "detect_utm_crs",
     "evaluate_candidate_viewshed",
     "extract_dsm_peak_candidates",
+    "fetch_cgndb_features",
     "fetch_osm_buildings",
     "fetch_overture_buildings",
+    "is_canada_dem_source",
+    "is_canada_dsm_source",
+    "is_canada_province",
+    "load_nrcan_dem",
+    "lookup_cgndb_place",
     "lookup_geonames_place",
     "main",
     "match_ept_resources_for_bbox",
@@ -66,6 +90,9 @@ __all__ = [
     "rasterize_buildings_onto_dem",
     "resolve_location",
     "run_analysis",
+    "search_nrcan_stac_assets",
     "select_tall_structure_candidates",
     "stream_3dep_lidar_dsm",
+    "stream_nrcan_elevation_grid",
+    "utm_bounds_to_wgs84_bbox",
 ]

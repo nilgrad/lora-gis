@@ -6,11 +6,17 @@ This guide covers the core point-to-point, multi-leg, and mesh repeater discover
 
 ## 1. Simple Point-to-Point & Multi-Leg Routes (`--route`)
 
-Pass town or summit names (resolved automatically via USGS GeoNames) or inline `name=lat,lon` coordinates. By default, single-link routes search for both **1-hop** (single repeater) and **2-hop** (two-repeater pair) solutions whenever direct line-of-sight is blocked by terrain.
+Pass town or summit names (resolved automatically via USGS GeoNames in the US or NRCan CGNDB in Canada) or inline `name=lat,lon` coordinates. By default, single-link routes search for both **1-hop** (single repeater) and **2-hop** (two-repeater pair) solutions whenever direct line-of-sight is blocked by terrain.
 
 ```bash
 # Nationwide US lookup with state code
 python3 -m lora_gis --route "Beacon, NY" "New Paltz, NY"
+
+# Canadian lookup with province code (auto-selects NRCan CGNDB, HRDEM, and world-topo)
+python3 -m lora_gis --route "Banff, AB" "Canmore, AB"
+
+# Explicit Canadian DEM presets: canada-hrdem (1 m DTM), canada-hrdem-dsm (1 m DTM + DSM), canada-mrdem (30 m nationwide)
+python3 -m lora_gis --dem canada-hrdem --province QC --route "Gatineau" "Wakefield" --basemap canada-topo
 
 # Colorado Front Range example with custom relay mast height
 python3 -m lora_gis --route "Boulder, CO" "Nederland, CO" --relay-height 45ft

@@ -20,7 +20,7 @@ from .buildings import (
 from .cartography import render_candidate_profiles, render_city_viewshed_map, render_topographic_map
 from .config import LoRaGISConfig, normalize_loc_key, parse_distance_m, parse_height_value_m
 from .dem import DEMProvider
-from .geonames import parse_link_pair, resolve_location
+from .geonames import is_canada_province, parse_link_pair, resolve_location
 from .lidar import stream_3dep_lidar_dsm
 from .report import export_city_markdown_report, export_markdown_report
 from .rf import analyze_link, compute_link_padding
@@ -91,9 +91,10 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
         help="Minimum structure height for --auto-candidates, e.g. '15m' or '50ft' (default: 15m)",
     )
     topo_group.add_argument(
-        "--state",
+        "--state", "--province",
+        dest="state",
         default=None,
-        help="Default 2-letter US state code for USGS GeoNames lookups (e.g. 'NY', 'CO')",
+        help="Default 2-letter US state or Canadian province/territory code for GeoNames lookups (e.g. 'NY', 'CO', 'ON', 'BC')",
     )
 
     height_group = parser.add_argument_group("Antenna & Relay Heights")
@@ -161,7 +162,10 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
     elev_group.add_argument(
         "--dem",
         default=None,
-        help="DEM preset ('usgs-3dep', 'usgs-3dep-dsm', 'ny-gis') or custom ArcGIS ImageServer URL",
+        help=(
+            "DEM preset ('usgs-3dep', 'usgs-3dep-dsm', 'ny-gis', 'canada-hrdem', "
+            "'canada-hrdem-dsm', 'canada-mrdem') or custom ArcGIS ImageServer URL"
+        ),
     )
     elev_group.add_argument(
         "--dem-file",
@@ -283,7 +287,7 @@ def build_arg_parser(prog_title: str = "LoRa-GIS") -> argparse.ArgumentParser:
     output_group.add_argument(
         "--basemap",
         default=None,
-        help="Map backdrop preset ('topo', 'osm', 'satellite') or custom QGIS XYZ/WMS URI (default: 'topo')",
+        help="Map backdrop preset ('topo', 'world-topo', 'canada-topo', 'osm', 'satellite') or custom QGIS XYZ/WMS URI (default: 'topo')",
     )
     output_group.add_argument(
         "--output-dir", "-o",
@@ -345,6 +349,7 @@ def apply_cli_args(config: LoRaGISConfig, argv: Optional[List[str]] = None) -> L
         config.min_grid_step_m = args.min_grid_step
     if args.dem is not None:
         config.dem_source = args.dem
+        config.dem_explicit = True
     if args.dem_file is not None:
         config.dem_file = args.dem_file
     if args.dsm_file is not None:
@@ -548,6 +553,29 @@ def _load_urban_layers(
     return buildings_list
 
 
+def _apply_canada_smart_defaults(
+    config: LoRaGISConfig,
+    location_keys: List[str],
+    is_city: bool = False,
+) -> None:
+    """Applies Canadian DEM and topographic basemap defaults when running on Canadian locations."""
+    resolved_ca = bool(location_keys) and all(
+        config.locations.get(k, {}).get("country") == "CA" for k in location_keys
+    )
+    in_canada = resolved_ca or is_canada_province(config.default_state)
+
+    if in_canada and not config.dem_explicit and config.dem_file is None:
+        config.dem_source = "canada-hrdem-dsm" if is_city else "canada-hrdem"
+        print(
+            f"Detected Canadian location(s); defaulting DEM source to '{config.dem_source}' (NRCan CanElevation).",
+            flush=True,
+        )
+
+    if (in_canada or config.is_canada_dem) and not config.basemap_explicit:
+        if config.basemap.strip().lower() == "topo":
+            config.basemap = "world-topo"
+
+
 def _run_city_analysis(config: LoRaGISConfig) -> Dict:
     """Executes --city rooftop viewshed ranking, urban map rendering, and Markdown report export."""
     assert config.city_target is not None
@@ -559,6 +587,8 @@ def _run_city_analysis(config: LoRaGISConfig) -> Dict:
             cand_key = _resolve_candidate_token(cand_tok, config)
             if cand_key not in config.active_candidate_keys:
                 config.active_candidate_keys.append(cand_key)
+
+    _apply_canada_smart_defaults(config, [center_key], is_city=True)
 
     # Smart urban defaults in --city mode unless overridden
     if not config.basemap_explicit:
@@ -628,6 +658,8 @@ def _run_city_analysis(config: LoRaGISConfig) -> Dict:
             unit_scale=config.dem_unit_scale,
             sampling_mode="nearest" if config.is_dsm_mode else "bilinear",
             dsm_file=config.dsm_file,
+            dem_source=config.dem_source,
+            nrcan_stac_url=config.nrcan_stac_url,
         )
         dem.load_raster(dem_xmin, dem_ymin, dem_xmax, dem_ymax, resolution_m=2.0, max_px=4000)
 
@@ -715,6 +747,8 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             active_location_keys.append(u_key)
         if v_key not in active_location_keys:
             active_location_keys.append(v_key)
+
+    _apply_canada_smart_defaults(config, active_location_keys, is_city=False)
 
     endpoint_custom_heights = {k for k in config.custom_height_keys if k in active_location_keys}
     multi_link_mode = len(config.active_links) > 1 or len(endpoint_custom_heights) > 0
@@ -848,6 +882,8 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             unit_scale=config.dem_unit_scale,
             sampling_mode="nearest" if config.is_dsm_mode else "bilinear",
             dsm_file=config.dsm_file,
+            dem_source=config.dem_source,
+            nrcan_stac_url=config.nrcan_stac_url,
         )
 
         all_dem_keys = list(active_location_keys) + [
