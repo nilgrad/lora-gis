@@ -10,6 +10,7 @@ from .buildings import (
     rasterize_buildings_onto_dem,
     select_tall_structure_candidates,
 )
+from .cartography import render_candidate_profiles, render_path_profiles
 from .cli import apply_cli_args, main, run_analysis
 from .config import (
     BASEMAP_PRESETS,
@@ -88,6 +89,8 @@ __all__ = [
     "parse_osm_height_m",
     "parse_overture_records",
     "rasterize_buildings_onto_dem",
+    "render_candidate_profiles",
+    "render_path_profiles",
     "resolve_location",
     "run_analysis",
     "search_nrcan_stac_assets",

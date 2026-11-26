@@ -25,6 +25,7 @@ def export_markdown_report(
     md_output_path: str,
     candidate_keys: Optional[List[str]] = None,
     profiles_filename: Optional[str] = None,
+    path_profiles_filename: Optional[str] = None,
     buildings: Optional[List] = None,
 ) -> None:
     """Exports the complete Markdown RF link & repeater report to `md_output_path`."""
@@ -124,8 +125,16 @@ def export_markdown_report(
             md_lines.append(f"| **Viable 2-Hop Pairs ({pair_name})** | `{len(res['discovered_2hop'])}` |")
     md_lines.append("")
 
+    if path_profiles_filename and len(link_results) > 1:
+        md_lines.extend([
+            "### Terrain & Line-of-Sight Profiles",
+            "",
+            f"![Terrain & Line-of-Sight Profiles]({path_profiles_filename})",
+            "",
+        ])
+
     sec_idx = 2
-    for res in link_results:
+    for link_idx, res in enumerate(link_results):
         u_loc, v_loc = res["u_loc"], res["v_loc"]
         hu, hv = u_loc["height_m"], v_loc["height_m"]
         eu, ev = u_loc["elev_m"], v_loc["elev_m"]
@@ -141,6 +150,12 @@ def export_markdown_report(
             f"Min $F_1$ ratio `{res['direct_prof']['min_fresnel_ratio']*100:.0f}%`.",
             "",
         ])
+
+        if path_profiles_filename and len(link_results) == 1 and link_idx == 0:
+            md_lines.extend([
+                f"![Terrain & Line-of-Sight Profiles]({path_profiles_filename})",
+                "",
+            ])
 
         if res["best_2hop"] is not None:
             r1_pt, r2_pt = res["best_2hop"]["r1"], res["best_2hop"]["r2"]

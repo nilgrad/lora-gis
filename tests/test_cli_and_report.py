@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from lora_gis.cartography import render_candidate_profiles
+from lora_gis.cartography import render_candidate_profiles, render_path_profiles
 from lora_gis.cli import apply_cli_args
 from lora_gis.config import LoRaGISConfig
 from lora_gis.dem import DEMProvider
@@ -188,6 +188,82 @@ class TestReportAndProfileExport(unittest.TestCase):
 
         # No candidates -> render_candidate_profiles returns None
         self.assertIsNone(render_candidate_profiles(cfg, [], os.path.join(tempfile.gettempdir(), "unused.png")))
+        self.assertIsNone(render_path_profiles(cfg, [], os.path.join(tempfile.gettempdir(), "unused.png")))
+
+    def test_render_path_profiles_without_explicit_candidates(self) -> None:
+        arr = np.full((100, 100), 300.0, dtype=np.float64)
+        arr[45:100, 47:53] = 450.0
+        yy, xx = np.mgrid[0:100, 0:100]
+        dist_peak = np.hypot((xx - 50.0) * 40.0, (yy - 30.0) * 40.0)
+        arr = np.maximum(arr, 300.0 + 200.0 * np.exp(-0.5 * (dist_peak / 280.0) ** 2))
+
+        dem = DEMProvider("https://example.invalid", wkid=26918)
+        dem.cache = (arr, 0.0, 0.0, 4000.0, 4000.0, 100, 100)
+
+        cfg = LoRaGISConfig(
+            title="PathProfileTest",
+            initial_grid_step_m=400.0,
+            min_grid_step_m=400.0,
+            grid_padding_m=600.0,
+            narrow_axis_padding_m=600.0,
+            locations={
+                "town-a": {"name": "Town A", "lat": 41.015, "lon": -73.99, "x": 1000.0, "y": 1500.0, "xy": (1000.0, 1500.0), "height_m": 10.0},
+                "town-b": {"name": "Town B", "lat": 41.015, "lon": -73.97, "x": 3000.0, "y": 1500.0, "xy": (3000.0, 1500.0), "height_m": 10.0},
+            },
+        )
+
+        inv_tr = _FakeInvTransform()
+        res = analyze_link(
+            u_key="town-a",
+            v_key="town-b",
+            config=cfg,
+            dem=dem,
+            inv_transform=inv_tr,
+            hub_repeater_keys=set(),
+            multi_link_mode=False,
+            allow_2hop=True,
+            headless_cli=True,
+            candidate_keys=[],
+        )
+
+        self.assertIn("profile", res["direct_prof"])
+        self.assertIsNotNone(res["best_1hop"])
+        self.assertIn("profile", res["best_1hop"]["leg1_profile"])
+        self.assertIn("profile", res["best_1hop"]["leg2_profile"])
+        self.assertIsNotNone(res["best_2hop"])
+        self.assertIn("profile", res["best_2hop"]["hop1_profile"])
+        self.assertIn("profile", res["best_2hop"]["hop2_profile"])
+        self.assertIn("profile", res["best_2hop"]["hop3_profile"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path_png = os.path.join(tmpdir, "path_profiles.png")
+            written = render_path_profiles(cfg, [res], path_png)
+            self.assertEqual(written, path_png)
+            self.assertTrue(os.path.isfile(path_png))
+            self.assertGreater(os.path.getsize(path_png), 5000)
+
+            md_path = os.path.join(tmpdir, "report.md")
+            export_markdown_report(
+                config=cfg,
+                dem=dem,
+                active_location_keys=["town-a", "town-b"],
+                link_results=[res],
+                hub_repeater_keys=set(),
+                multi_link_mode=False,
+                enable_2hop=True,
+                zone_label="UTM Zone 18N",
+                inv_transform=inv_tr,
+                peaks_list=[],
+                towns_list=[],
+                peak_elevs=[],
+                timestamp_str="2026-11-26_17-35-00",
+                png_filename="map.png",
+                md_output_path=md_path,
+                path_profiles_filename="path_profiles.png",
+            )
+            with open(md_path, "r", encoding="utf-8") as f:
+                md_content = f.read()
+            self.assertIn("![Terrain & Line-of-Sight Profiles](path_profiles.png)", md_content)
 
 
 if __name__ == "__main__":

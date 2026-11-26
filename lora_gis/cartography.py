@@ -638,6 +638,153 @@ def render_topographic_map(
     return peaks_list, towns_list, peak_elevs
 
 
+def _plot_terrain_profile_axis(
+    ax,
+    config: LoRaGISConfig,
+    leg_title: str,
+    leg_d: Dict,
+    left_lbl: str,
+    right_lbl: str,
+    show_legend: bool = False,
+) -> None:
+    """Plots a single terrain/DSM cross-sectional elevation profile with LOS and F1 envelope."""
+    import numpy as np
+
+    prof = leg_d["profile"]
+    dist_km = np.array(prof["dist_km"], dtype=np.float64)
+    terrain_m = np.array(prof["terrain_m"], dtype=np.float64)
+    sight_m = np.array(prof["sightline_m"], dtype=np.float64)
+    f1_m = np.array(prof["f1_radius_m"], dtype=np.float64)
+
+    raw_min = float(min(terrain_m.min(), (sight_m - f1_m).min()))
+    raw_max = float(max(terrain_m.max(), (sight_m + f1_m).max()))
+    span = max(40.0, raw_max - raw_min)
+    y_min = raw_min - max(20.0, 0.10 * span)
+    y_max = raw_max + max(50.0, 0.28 * span)
+
+    # Terrain / surface fill and ridge outline
+    if "ground_m" in prof:
+        ground_m = np.array(prof["ground_m"], dtype=np.float64)
+        ax.fill_between(dist_km, y_min, ground_m, color="#b5a68e", alpha=0.55, label="Ground DEM (+ 4/3 Bulge)")
+        ax.fill_between(
+            dist_km,
+            ground_m,
+            terrain_m,
+            where=(terrain_m > ground_m),
+            color="#6b7b8c",
+            alpha=0.65,
+            label="Surface / Buildings (DSM)",
+        )
+        ax.plot(dist_km, terrain_m, color="#3b4856", linewidth=1.2)
+    else:
+        surface_label = "DSM Surface (+ 4/3 Bulge)" if config.is_dsm_mode else "Terrain (+ 4/3 Earth Bulge)"
+        ax.fill_between(dist_km, y_min, terrain_m, color="#b5a68e", alpha=0.55, label=surface_label)
+        ax.plot(dist_km, terrain_m, color="#5c4b37", linewidth=1.3)
+
+    # 1st Fresnel Zone envelope
+    f1_color = "#2ca02c" if leg_d["clear"] else "#ff9933"
+    ax.fill_between(
+        dist_km,
+        sight_m - f1_m,
+        sight_m + f1_m,
+        color=f1_color,
+        alpha=0.18,
+        label="1st Fresnel Zone (F1)",
+    )
+
+    # Direct LOS line
+    los_color = "#1b8a2f" if leg_d["clear"] else "#cc2222"
+    los_style = "-" if leg_d["clear"] else "--"
+    ax.plot(dist_km, sight_m, color=los_color, linestyle=los_style, linewidth=1.6, label="Direct LOS")
+
+    # Highlight terrain protruding above the LOS sightline in red
+    blocked_mask = terrain_m > sight_m
+    if np.any(blocked_mask):
+        ax.fill_between(
+            dist_km,
+            sight_m,
+            terrain_m,
+            where=blocked_mask,
+            interpolate=True,
+            color="#d62728",
+            alpha=0.55,
+            label="Terrain Blockage",
+        )
+
+    # Mark antenna tips at endpoints
+    ax.scatter([dist_km[0], dist_km[-1]], [sight_m[0], sight_m[-1]], color="#1f4e79", s=32, zorder=5)
+
+    # Annotate worst clearance / blockage point
+    wx = prof["worst_dist_km"]
+    wt = prof["worst_terrain_m"]
+    ws = prof["worst_sightline_m"]
+    min_clr = leg_d["min_clearance_m"]
+    min_clr_ft = min_clr * 3.28084
+    place_left = wx >= 0.55 * dist_km[-1]
+    x_offset = -8 if place_left else 8
+    ha_align = "right" if place_left else "left"
+
+    if not leg_d["clear"]:
+        ax.plot([wx, wx], [ws, wt], color="#990000", linewidth=2.0, zorder=6)
+        ax.scatter([wx], [wt], color="#d62728", edgecolor="#ffffff", s=50, zorder=7)
+        ann_txt = f"Worst blockage:\n{min_clr:.1f} m ({min_clr_ft:.0f} ft) @ {wx:.2f} km"
+        ax.annotate(
+            ann_txt,
+            xy=(wx, wt),
+            xytext=(x_offset, 12),
+            textcoords="offset points",
+            ha=ha_align,
+            fontsize=8,
+            fontweight="bold",
+            color="#8c0d0d",
+            bbox=dict(boxstyle="round,pad=0.25", fc="#fff3f3", ec="#d62728", lw=0.8),
+            arrowprops=dict(arrowstyle="->", color="#990000", lw=1.0),
+            zorder=8,
+        )
+    else:
+        ax.scatter([wx], [wt], color="#1b8a2f", edgecolor="#ffffff", s=45, zorder=7)
+        ann_txt = f"Min clearance:\n+{min_clr:.1f} m (+{min_clr_ft:.0f} ft, {leg_d['min_fresnel_ratio']*100:.0f}% F1)"
+        ax.annotate(
+            ann_txt,
+            xy=(wx, wt),
+            xytext=(x_offset, 12),
+            textcoords="offset points",
+            ha=ha_align,
+            fontsize=8,
+            fontweight="bold",
+            color="#136620",
+            bbox=dict(boxstyle="round,pad=0.25", fc="#f2fbf4", ec="#1b8a2f", lw=0.8),
+            arrowprops=dict(arrowstyle="->", color="#1b8a2f", lw=1.0),
+            zorder=8,
+        )
+
+    status_badge = (
+        f"CLEAR ({leg_d['min_fresnel_ratio']*100:.0f}% F1)"
+        if leg_d["clear"]
+        else f"BLOCKED ({min_clr:.1f} m / {min_clr_ft:.0f} ft)"
+    )
+    ax.set_title(
+        f"{leg_title}\n{dist_km[-1]:.2f} km | {status_badge}",
+        fontsize=9.2,
+        fontweight="bold",
+        color="#136620" if leg_d["clear"] else "#8c0d0d",
+    )
+    ax.set_xlabel(f"Distance from {left_lbl} to {right_lbl} (km)", fontsize=8.5)
+    ax.set_ylabel("Elevation ASL (m)", fontsize=8.5)
+    ax.set_xlim(0.0, float(dist_km[-1]))
+    ax.set_ylim(y_min, y_max)
+    ax.grid(True, linestyle=":", alpha=0.55)
+
+    # Secondary Y-axis in feet
+    ax_ft = ax.twinx()
+    ax_ft.set_ylim(y_min * 3.28084, y_max * 3.28084)
+    ax_ft.set_ylabel("Elevation ASL (ft)", fontsize=8, color="#555555")
+    ax_ft.tick_params(axis="y", labelsize=8, colors="#555555")
+
+    if show_legend:
+        ax.legend(loc="lower right", fontsize=7.5, framealpha=0.9)
+
+
 def render_candidate_profiles(
     config: LoRaGISConfig,
     link_results: List[Dict],
@@ -665,7 +812,6 @@ def render_candidate_profiles(
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        import numpy as np
     except Exception as exc:
         print(f"Warning: Skipping candidate profile chart (matplotlib unavailable: {exc}).", flush=True)
         return None
@@ -698,141 +844,159 @@ def render_candidate_profiles(
             ),
         ]
         for col_idx, (leg_title, leg_d, left_lbl, right_lbl) in enumerate(legs):
-            ax = axes[row_idx][col_idx]
-            prof = leg_d["profile"]
-            dist_km = np.array(prof["dist_km"], dtype=np.float64)
-            terrain_m = np.array(prof["terrain_m"], dtype=np.float64)
-            sight_m = np.array(prof["sightline_m"], dtype=np.float64)
-            f1_m = np.array(prof["f1_radius_m"], dtype=np.float64)
-
-            raw_min = float(min(terrain_m.min(), (sight_m - f1_m).min()))
-            raw_max = float(max(terrain_m.max(), (sight_m + f1_m).max()))
-            span = max(40.0, raw_max - raw_min)
-            y_min = raw_min - max(20.0, 0.10 * span)
-            y_max = raw_max + max(50.0, 0.28 * span)
-
-            # Terrain / surface fill and ridge outline
-            if "ground_m" in prof:
-                ground_m = np.array(prof["ground_m"], dtype=np.float64)
-                ax.fill_between(dist_km, y_min, ground_m, color="#b5a68e", alpha=0.55, label="Ground DEM (+ 4/3 Bulge)")
-                ax.fill_between(
-                    dist_km,
-                    ground_m,
-                    terrain_m,
-                    where=(terrain_m > ground_m),
-                    color="#6b7b8c",
-                    alpha=0.65,
-                    label="Surface / Buildings (DSM)",
-                )
-                ax.plot(dist_km, terrain_m, color="#3b4856", linewidth=1.2)
-            else:
-                surface_label = "DSM Surface (+ 4/3 Bulge)" if config.is_dsm_mode else "Terrain (+ 4/3 Earth Bulge)"
-                ax.fill_between(dist_km, y_min, terrain_m, color="#b5a68e", alpha=0.55, label=surface_label)
-                ax.plot(dist_km, terrain_m, color="#5c4b37", linewidth=1.3)
-
-            # 1st Fresnel Zone envelope
-            f1_color = "#2ca02c" if leg_d["clear"] else "#ff9933"
-            ax.fill_between(
-                dist_km,
-                sight_m - f1_m,
-                sight_m + f1_m,
-                color=f1_color,
-                alpha=0.18,
-                label="1st Fresnel Zone (F1)",
+            _plot_terrain_profile_axis(
+                ax=axes[row_idx][col_idx],
+                config=config,
+                leg_title=leg_title,
+                leg_d=leg_d,
+                left_lbl=left_lbl,
+                right_lbl=right_lbl,
+                show_legend=(row_idx == 0 and col_idx == 0),
             )
-
-            # Direct LOS line
-            los_color = "#1b8a2f" if leg_d["clear"] else "#cc2222"
-            los_style = "-" if leg_d["clear"] else "--"
-            ax.plot(dist_km, sight_m, color=los_color, linestyle=los_style, linewidth=1.6, label="Direct LOS")
-
-            # Highlight terrain protruding above the LOS sightline in red
-            blocked_mask = terrain_m > sight_m
-            if np.any(blocked_mask):
-                ax.fill_between(
-                    dist_km,
-                    sight_m,
-                    terrain_m,
-                    where=blocked_mask,
-                    interpolate=True,
-                    color="#d62728",
-                    alpha=0.55,
-                    label="Terrain Blockage",
-                )
-
-            # Mark antenna tips at endpoints
-            ax.scatter([dist_km[0], dist_km[-1]], [sight_m[0], sight_m[-1]], color="#1f4e79", s=32, zorder=5)
-
-            # Annotate worst clearance / blockage point
-            wx = prof["worst_dist_km"]
-            wt = prof["worst_terrain_m"]
-            ws = prof["worst_sightline_m"]
-            min_clr = leg_d["min_clearance_m"]
-            min_clr_ft = min_clr * 3.28084
-            if not leg_d["clear"]:
-                ax.plot([wx, wx], [ws, wt], color="#990000", linewidth=2.0, zorder=6)
-                ax.scatter([wx], [wt], color="#d62728", edgecolor="#ffffff", s=50, zorder=7)
-                ann_txt = f"Worst blockage:\n{min_clr:.1f} m ({min_clr_ft:.0f} ft) @ {wx:.2f} km"
-                x_offset = 10 if wx < 0.62 * dist_km[-1] else -115
-                ax.annotate(
-                    ann_txt,
-                    xy=(wx, wt),
-                    xytext=(x_offset, 12),
-                    textcoords="offset points",
-                    fontsize=8,
-                    fontweight="bold",
-                    color="#8c0d0d",
-                    bbox=dict(boxstyle="round,pad=0.25", fc="#fff3f3", ec="#d62728", lw=0.8),
-                    arrowprops=dict(arrowstyle="->", color="#990000", lw=1.0),
-                    zorder=8,
-                )
-            else:
-                ax.scatter([wx], [wt], color="#1b8a2f", edgecolor="#ffffff", s=45, zorder=7)
-                ann_txt = f"Min clearance:\n+{min_clr:.1f} m (+{min_clr_ft:.0f} ft, {leg_d['min_fresnel_ratio']*100:.0f}% F1)"
-                x_offset = 10 if wx < 0.62 * dist_km[-1] else -130
-                ax.annotate(
-                    ann_txt,
-                    xy=(wx, wt),
-                    xytext=(x_offset, 12),
-                    textcoords="offset points",
-                    fontsize=8,
-                    fontweight="bold",
-                    color="#136620",
-                    bbox=dict(boxstyle="round,pad=0.25", fc="#f2fbf4", ec="#1b8a2f", lw=0.8),
-                    arrowprops=dict(arrowstyle="->", color="#1b8a2f", lw=1.0),
-                    zorder=8,
-                )
-
-            status_badge = (
-                f"CLEAR ({leg_d['min_fresnel_ratio']*100:.0f}% F1)"
-                if leg_d["clear"]
-                else f"BLOCKED ({min_clr:.1f} m / {min_clr_ft:.0f} ft)"
-            )
-            ax.set_title(
-                f"{leg_title}\n{dist_km[-1]:.2f} km | {status_badge}",
-                fontsize=9.5,
-                fontweight="bold",
-                color="#136620" if leg_d["clear"] else "#8c0d0d",
-            )
-            ax.set_xlabel(f"Distance from {left_lbl} to {right_lbl} (km)", fontsize=8.5)
-            ax.set_ylabel("Elevation ASL (m)", fontsize=8.5)
-            ax.set_xlim(0.0, float(dist_km[-1]))
-            ax.set_ylim(y_min, y_max)
-            ax.grid(True, linestyle=":", alpha=0.55)
-
-            # Secondary Y-axis in feet
-            ax_ft = ax.twinx()
-            ax_ft.set_ylim(y_min * 3.28084, y_max * 3.28084)
-            ax_ft.set_ylabel("Elevation ASL (ft)", fontsize=8, color="#555555")
-            ax_ft.tick_params(axis="y", labelsize=8, colors="#555555")
-
-            if row_idx == 0 and col_idx == 0:
-                ax.legend(loc="lower right", fontsize=7.5, framealpha=0.9)
 
     fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
     fig.savefig(png_output_path, dpi=150)
     plt.close(fig)
     print(f"Candidate Terrain Blockage Profiles exported to:     {png_output_path}", flush=True)
+    return png_output_path
+
+
+def render_path_profiles(
+    config: LoRaGISConfig,
+    link_results: List[Dict],
+    png_output_path: str,
+) -> Optional[str]:
+    """
+    Renders cross-sectional terrain elevation profiles for the direct link and discovered
+    optimal 1-hop and 2-hop repeater paths across all analyzed links.
+    Returns `png_output_path` on success, or None if no profile data or matplotlib is unavailable.
+    """
+    panel_rows = []
+    for res in link_results:
+        u_loc, v_loc = res["u_loc"], res["v_loc"]
+        hu_ft = u_loc["height_m"] * 3.28084
+        hv_ft = v_loc["height_m"] * 3.28084
+
+        direct_prof = res.get("direct_prof") or {}
+        if "profile" in direct_prof:
+            panel_rows.append([
+                (
+                    f"Direct Link: {u_loc['name']} ({hu_ft:.0f} ft) → {v_loc['name']} ({hv_ft:.0f} ft)",
+                    direct_prof,
+                    u_loc["name"],
+                    v_loc["name"],
+                )
+            ])
+
+        best_1hop = res.get("best_1hop")
+        if best_1hop and "leg1_profile" in best_1hop and "leg2_profile" in best_1hop:
+            l1 = best_1hop["leg1_profile"]
+            l2 = best_1hop["leg2_profile"]
+            if "profile" in l1 and "profile" in l2:
+                oh_name = best_1hop.get("candidate_name") or "1-Hop Relay"
+                oh_ft = best_1hop.get("relay_height_m", config.relay_height_m) * 3.28084
+                panel_rows.append([
+                    (
+                        f"1-Hop Leg 1: {u_loc['name']} ({hu_ft:.0f} ft) → {oh_name} ({oh_ft:.0f} ft)",
+                        l1,
+                        u_loc["name"],
+                        oh_name,
+                    ),
+                    (
+                        f"1-Hop Leg 2: {oh_name} ({oh_ft:.0f} ft) → {v_loc['name']} ({hv_ft:.0f} ft)",
+                        l2,
+                        oh_name,
+                        v_loc["name"],
+                    ),
+                ])
+
+        best_2hop = res.get("best_2hop")
+        if (
+            best_2hop
+            and "hop1_profile" in best_2hop
+            and "hop2_profile" in best_2hop
+            and "hop3_profile" in best_2hop
+        ):
+            h1 = best_2hop["hop1_profile"]
+            h2 = best_2hop["hop2_profile"]
+            h3 = best_2hop["hop3_profile"]
+            if "profile" in h1 and "profile" in h2 and "profile" in h3:
+                r1_name = best_2hop.get("r1_name") or "2-Hop Relay 1"
+                r2_name = best_2hop.get("r2_name") or "2-Hop Relay 2"
+                if r1_name == "Grid Relay":
+                    r1_name = "Relay 1 (Grid)"
+                if r2_name == "Grid Relay":
+                    r2_name = "Relay 2 (Grid)"
+                r1_ft = best_2hop.get("r1_height_m", config.relay_height_m) * 3.28084
+                r2_ft = best_2hop.get("r2_height_m", config.relay_height_m) * 3.28084
+                panel_rows.append([
+                    (
+                        f"2-Hop Seg 1: {u_loc['name']} ({hu_ft:.0f} ft) → {r1_name} ({r1_ft:.0f} ft)",
+                        h1,
+                        u_loc["name"],
+                        r1_name,
+                    ),
+                    (
+                        f"2-Hop Seg 2: {r1_name} ({r1_ft:.0f} ft) → {r2_name} ({r2_ft:.0f} ft)",
+                        h2,
+                        r1_name,
+                        r2_name,
+                    ),
+                    (
+                        f"2-Hop Seg 3: {r2_name} ({r2_ft:.0f} ft) → {v_loc['name']} ({hv_ft:.0f} ft)",
+                        h3,
+                        r2_name,
+                        v_loc["name"],
+                    ),
+                ])
+
+    if not panel_rows:
+        return None
+
+    try:
+        import os
+        import tempfile
+        os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "lora_gis_mpl"))
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.gridspec import GridSpec
+    except Exception as exc:
+        print(f"Warning: Skipping path profile chart (matplotlib unavailable: {exc}).", flush=True)
+        return None
+
+    n_rows = len(panel_rows)
+    fig = plt.figure(figsize=(16.5, 3.8 * n_rows))
+    fig.patch.set_facecolor("#ffffff")
+    gs = GridSpec(n_rows, 6, figure=fig)
+
+    freq_label = f"{config.freq_mhz:.0f}" if config.freq_mhz.is_integer() else f"{config.freq_mhz:.1f}"
+    fig.suptitle(
+        f"{config.title} ({freq_label} MHz) Terrain & Line-of-Sight Profiles (K = 4/3 Earth Curvature)",
+        fontsize=13,
+        fontweight="bold",
+        y=0.992,
+    )
+
+    for row_idx, panels in enumerate(panel_rows):
+        n_cols = len(panels)
+        col_span = 6 // n_cols
+        for col_idx, (leg_title, leg_d, left_lbl, right_lbl) in enumerate(panels):
+            ax = fig.add_subplot(gs[row_idx, col_idx * col_span : (col_idx + 1) * col_span])
+            _plot_terrain_profile_axis(
+                ax=ax,
+                config=config,
+                leg_title=leg_title,
+                leg_d=leg_d,
+                left_lbl=left_lbl,
+                right_lbl=right_lbl,
+                show_legend=(row_idx == 0 and col_idx == 0),
+            )
+
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.965])
+    fig.savefig(png_output_path, dpi=150)
+    plt.close(fig)
+    print(f"Path Terrain & LOS Profiles exported to:             {png_output_path}", flush=True)
     return png_output_path
 
 

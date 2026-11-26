@@ -17,7 +17,12 @@ from .buildings import (
     rasterize_buildings_onto_dem,
     select_tall_structure_candidates,
 )
-from .cartography import render_candidate_profiles, render_city_viewshed_map, render_topographic_map
+from .cartography import (
+    render_candidate_profiles,
+    render_city_viewshed_map,
+    render_path_profiles,
+    render_topographic_map,
+)
 from .config import LoRaGISConfig, normalize_loc_key, parse_distance_m, parse_height_value_m
 from .dem import DEMProvider
 from .geonames import is_canada_province, parse_link_pair, resolve_location
@@ -988,6 +993,9 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             for r in link_results
         ) or bool(config.active_candidate_keys)
 
+        path_profiles_path_out = None
+        candidate_profiles_path_out = None
+
         if any_solution and not user_cancelled:
             peaks_list, towns_list, peak_elevs = render_topographic_map(
                 config=config,
@@ -1006,11 +1014,18 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 buildings=buildings_list,
             )
 
+            path_profiles_filename = None
+            path_profiles_path = os.path.join(run_output_dir, "path_profiles.png")
+            if render_path_profiles(config=config, link_results=link_results, png_output_path=path_profiles_path):
+                path_profiles_filename = "path_profiles.png"
+                path_profiles_path_out = path_profiles_path
+
             profiles_filename = None
             if config.active_candidate_keys:
                 profiles_path = os.path.join(run_output_dir, "candidate_profiles.png")
                 if render_candidate_profiles(config=config, link_results=link_results, png_output_path=profiles_path):
                     profiles_filename = "candidate_profiles.png"
+                    candidate_profiles_path_out = profiles_path
 
             export_markdown_report(
                 config=config,
@@ -1030,6 +1045,7 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
                 md_output_path=md_output_path,
                 candidate_keys=config.active_candidate_keys,
                 profiles_filename=profiles_filename,
+                path_profiles_filename=path_profiles_filename,
                 buildings=buildings_list,
             )
 
@@ -1037,6 +1053,8 @@ def run_analysis(config: LoRaGISConfig) -> Dict:
             "run_output_dir": run_output_dir,
             "png_output_path": png_output_path,
             "md_output_path": md_output_path,
+            "path_profiles_path": path_profiles_path_out,
+            "candidate_profiles_path": candidate_profiles_path_out,
             "link_results": link_results,
             "buildings_count": len(buildings_list),
         }
