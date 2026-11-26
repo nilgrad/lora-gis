@@ -49,6 +49,7 @@ apply_cli_args(
 
 result = run_analysis(cfg)
 print("Map:", result["png_output_path"])
+print("Path profiles:", result["path_profiles_path"])
 print("Report:", result["md_output_path"])
 
 for link in result["link_results"]:

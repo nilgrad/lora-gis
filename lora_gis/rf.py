@@ -265,7 +265,9 @@ def analyze_link(
     )
     QCoreApplication.processEvents()
 
-    direct_prof = analyze_link_profile(dem, config, (ux, uy), hu, (vx, vy), hv, multi_link_mode)
+    direct_prof = analyze_link_profile(
+        dem, config, (ux, uy), hu, (vx, vy), hv, multi_link_mode, include_profile=True
+    )
     direct_prof_60ft_u = analyze_link_profile(
         dem, config, (ux, uy), config.relay_height_m, (vx, vy), hv, multi_link_mode
     )
@@ -655,6 +657,13 @@ def analyze_link(
     ranked_1hop = sorted(discovered_1hop.values(), key=lambda s: rank_solution_key(s, config, multi_link_mode))
     best_1hop = ranked_1hop[0] if ranked_1hop else None
     if best_1hop is not None:
+        oh_h = best_1hop.get("relay_height_m", config.relay_height_m)
+        best_1hop["leg1_profile"] = analyze_link_profile(
+            dem, config, (ux, uy), hu, best_1hop["relay"], oh_h, multi_link_mode, include_profile=True
+        )
+        best_1hop["leg2_profile"] = analyze_link_profile(
+            dem, config, best_1hop["relay"], oh_h, (vx, vy), hv, multi_link_mode, include_profile=True
+        )
         r_ll = inv_transform.transform(QgsPointXY(*best_1hop["relay"]))
         print(
             f"Optimal 1-Hop Repeater ({u_loc['name']} <-> {v_loc['name']}): "
@@ -666,6 +675,17 @@ def analyze_link(
     ranked_2hop = sorted(discovered_2hop.values(), key=lambda s: rank_solution_key(s, config, multi_link_mode))
     best_2hop = ranked_2hop[0] if ranked_2hop else None
     if best_2hop is not None:
+        r1_h = best_2hop.get("r1_height_m", config.relay_height_m)
+        r2_h = best_2hop.get("r2_height_m", config.relay_height_m)
+        best_2hop["hop1_profile"] = analyze_link_profile(
+            dem, config, (ux, uy), hu, best_2hop["r1"], r1_h, multi_link_mode, include_profile=True
+        )
+        best_2hop["hop2_profile"] = analyze_link_profile(
+            dem, config, best_2hop["r1"], r1_h, best_2hop["r2"], r2_h, multi_link_mode, include_profile=True
+        )
+        best_2hop["hop3_profile"] = analyze_link_profile(
+            dem, config, best_2hop["r2"], r2_h, (vx, vy), hv, multi_link_mode, include_profile=True
+        )
         r1_ll = inv_transform.transform(QgsPointXY(*best_2hop["r1"]))
         r2_ll = inv_transform.transform(QgsPointXY(*best_2hop["r2"]))
         print(

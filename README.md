@@ -13,7 +13,7 @@ A **PyQGIS** Line-of-Sight (LOS), **LoRa / MeshCore RF repeater pathfinder**, an
 - **Urban Buildings & LiDAR DSMs**: Models building clutter and tree canopy using OpenStreetMap footprints, optional Overture Maps heights, NRCan 1 m Canadian LiDAR DSMs, local GeoTIFFs, or optional USGS 3DEP LiDAR streaming.
 - **LoRa RF Propagation Modeling**: Computes 1st Fresnel Zone ($F_1$) clearance at 915, 868, or 433 MHz, 4/3 effective Earth curvature, terrain/surface clearance, and Free-Space Path Loss (FSPL).
 - **Multi-Source Elevation & Auto-UTM**: Auto-detects the local UTM zone and streams elevation data from USGS 3DEP, NRCan CanElevation (Canada HRDEM and MRDEM-30), state GIS servers, custom ArcGIS ImageServers, or local GeoTIFFs.
-- **Automated Cartography & Reports**: Exports 1920x1080 topographic, street, or satellite maps, cross-sectional blockage profiles, viewshed coverage heatmaps, and Markdown RF reports.
+- **Automated Cartography & Reports**: Exports 1920x1080 topographic, street, or satellite maps, cross-sectional terrain/LOS path and candidate profiles, viewshed coverage heatmaps, and Markdown RF reports.
 
 ---
 

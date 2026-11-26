@@ -122,7 +122,8 @@ Candidates can also be defined in JSON via `"candidate_relays"` and `"candidate_
 Each run writes a timestamped folder under `results/YYYY-MM-DD_HH-MM-SS/` (configurable via `--output-dir`):
 
 - `map.png`: `1920x1080` topographic (or street/satellite) map showing endpoints, viable relay zones, optimal 1-hop (dashed blue) and 2-hop (solid red) paths, candidate sightlines, and USGS GeoNames peaks/towns.
-- `candidate_profiles.png`: Cross-sectional elevation and Fresnel clearance plots (generated whenever `--candidates` or `--auto-candidates` are evaluated).
+- `path_profiles.png`: Cross-sectional terrain elevation and 1st Fresnel Zone ($F_1$) clearance profiles for the direct link and discovered optimal 1-hop and 2-hop repeater paths.
+- `candidate_profiles.png`: Cross-sectional elevation and Fresnel clearance plots for explicit candidate relays (generated whenever `--candidates` or `--auto-candidates` are evaluated).
 - `report.md`: Complete Markdown RF report containing:
   - **1st Fresnel Zone ($F_1$) clearance**: Targets `>= 60%` $F_1$ clearance (`--min-fresnel 0.60`), the standard threshold for near-free-space RF propagation without diffraction loss.
   - **4/3 Earth curvature**: Uses an effective Earth radius of `8,495 km` to model standard atmospheric RF refraction.
