@@ -53,7 +53,7 @@ from .viewshed import (
     optimize_site_combinations,
 )
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 __all__ = [
     "BASEMAP_PRESETS",
     "BuildingFeature",

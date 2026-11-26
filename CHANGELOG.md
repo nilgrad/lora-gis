@@ -2,6 +2,15 @@
 
 All notable changes to `lora-gis` are documented in this file.
 
+## [1.3.1] - 2026-11-26
+
+### Added
+- **Automatic Terrain & LOS Path Profile Charts (`path_profiles.png`)**:
+  - Added `render_path_profiles()` (exported from `lora_gis` and `lora_gis.cartography`) to render a multi-row cross-sectional elevation chart covering the direct link, optimal 1-hop legs, and optimal 2-hop segments with `K = 4/3` Earth curvature, 1st Fresnel Zone ($F_1$) envelopes, and adaptive clearance/blockage callouts.
+  - Attached full profile arrays (`include_profile=True`) to `direct_prof`, `best_1hop` (`leg1_profile`, `leg2_profile`), and `best_2hop` (`hop1_profile`, `hop2_profile`, `hop3_profile`) in `analyze_link()`.
+  - Automatically exports `path_profiles.png` in `run_analysis()` for all route/link analyses (returning `path_profiles_path` and `candidate_profiles_path`) and embeds it in `report.md` without requiring `--candidates`.
+  - Added unit test coverage in `tests/test_cli_and_report.py` (`82` total tests).
+
 ## [1.3.0] - 2026-11-24
 
 ### Added
